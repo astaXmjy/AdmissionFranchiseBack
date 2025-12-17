@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .database import engine
-from .models import Base
-from .routers import auth, admin, franchise
-from .config.settings import get_app_settings
+from app.database import engine
+from app.models import Base
+from app.routers import auth, admin, franchise
+from app.config.settings import get_app_settings
 
 settings = get_app_settings()
 
