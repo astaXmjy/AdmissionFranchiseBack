@@ -7,11 +7,37 @@ import csv
 import io
 from ..database import get_db
 from ..auth import get_current_franchise
-from ..models import User, Student
-from ..schemas import StudentCreate, StudentResponse, StudentListResponse, StudentStats
+from ..models import User, Student, University, Course, Fee
+from ..schemas import (
+    StudentCreate, StudentResponse, StudentListResponse, StudentStats,
+    UniversitySelectResponse, CourseSelectResponse
+)
 from sqlalchemy import func
 
 router = APIRouter()
+
+# Allow franchises to view universities and courses for form dropdowns
+@router.get("/universities/select", response_model=List[UniversitySelectResponse])
+def get_universities_for_select(
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    """Get active universities for dropdown selection"""
+    universities = db.query(University).filter(University.is_active == True).all()
+    return universities
+
+@router.get("/courses/select/{university_id}", response_model=List[CourseSelectResponse])
+def get_courses_for_select(
+    university_id: int,
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    """Get active courses for dropdown selection by university"""
+    courses = db.query(Course).filter(
+        Course.university_id == university_id,
+        Course.is_active == True
+    ).all()
+    return courses
 
 @router.post("/students", response_model=StudentResponse)
 def create_student(
@@ -19,15 +45,32 @@ def create_student(
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
+    # Verify university exists
+    university = db.query(University).filter(University.id == student_data.university_id).first()
+    if not university:
+        raise HTTPException(status_code=404, detail="University not found")
+
+    # Verify course exists and belongs to the university
+    course = db.query(Course).filter(
+        Course.id == student_data.course_id,
+        Course.university_id == student_data.university_id
+    ).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found or doesn't belong to the selected university")
+
+    # Get fee for the course (if exists)
+    fee = db.query(Fee).filter(Fee.course_id == student_data.course_id).first()
+
     # Create student record
     student = Student(
         student_name=student_data.student_name,
         father_name=student_data.father_name,
         mother_name=student_data.mother_name,
         previous_class=student_data.previous_class,
-        course_applied=student_data.course_applied,
+        university_id=student_data.university_id,
+        course_id=student_data.course_id,
+        fee_id=fee.id if fee else None,
         branch_specialization=student_data.branch_specialization,
-        affiliating_university=student_data.affiliating_university,
         street_locality=student_data.street_locality,
         city=student_data.city,
         state=student_data.state,
@@ -40,16 +83,19 @@ def create_student(
     db.commit()
     db.refresh(student)
 
-    # Return response with franchise name
+    # Return response with franchise name and related data
     return StudentResponse(
         id=student.id,
         student_name=student.student_name,
         father_name=student.father_name,
         mother_name=student.mother_name,
         previous_class=student.previous_class,
-        course_applied=student.course_applied,
+        university_id=student.university_id,
+        university_name=university.name,
+        course_id=student.course_id,
+        course_name=course.name,
+        fee_id=student.fee_id,
         branch_specialization=student.branch_specialization,
-        affiliating_university=student.affiliating_university,
         street_locality=student.street_locality,
         city=student.city,
         state=student.state,
@@ -70,7 +116,12 @@ def get_my_students(
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
-    query = db.query(Student).filter(Student.franchise_id == current_franchise.id)
+    from sqlalchemy.orm import selectinload
+
+    query = db.query(Student).options(
+        selectinload(Student.university),
+        selectinload(Student.course)
+    ).filter(Student.franchise_id == current_franchise.id)
 
     if start_date:
         query = query.filter(Student.created_at >= start_date)
@@ -88,9 +139,12 @@ def get_my_students(
             father_name=student.father_name,
             mother_name=student.mother_name,
             previous_class=student.previous_class,
-            course_applied=student.course_applied,
+            university_id=student.university_id,
+            university_name=student.university.name if student.university else None,
+            course_id=student.course_id,
+            course_name=student.course.name if student.course else None,
+            fee_id=student.fee_id,
             branch_specialization=student.branch_specialization,
-            affiliating_university=student.affiliating_university,
             street_locality=student.street_locality,
             city=student.city,
             state=student.state,
@@ -146,7 +200,12 @@ def export_students_csv(
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
-    query = db.query(Student).filter(Student.franchise_id == current_franchise.id)
+    from sqlalchemy.orm import selectinload
+
+    query = db.query(Student).options(
+        selectinload(Student.university),
+        selectinload(Student.course)
+    ).filter(Student.franchise_id == current_franchise.id)
 
     if start_date:
         query = query.filter(Student.created_at >= start_date)
@@ -162,7 +221,7 @@ def export_students_csv(
     # Write header
     writer.writerow([
         'ID', 'Student Name', 'Father Name', 'Mother Name', 'Previous Class',
-        'Course Applied', 'Branch/Specialization', 'Affiliating University',
+        'University', 'Course', 'Branch/Specialization',
         'Street/Locality', 'City', 'State', 'Pincode', 'Contact Number', 'Aadhar Number',
         'Franchise', 'Status', 'Created At', 'Updated At'
     ])
@@ -175,9 +234,9 @@ def export_students_csv(
             student.father_name,
             student.mother_name,
             student.previous_class,
-            student.course_applied,
+            student.university.name if student.university else '',
+            student.course.name if student.course else '',
             student.branch_specialization or '',
-            student.affiliating_university or '',
             student.street_locality,
             student.city,
             student.state,

@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Enum as SQLEnum, Numeric, Date, Text, UniqueConstraint, Computed
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum
+from decimal import Decimal
 from app.database import Base
 
 class UserRole(str, Enum):
@@ -27,6 +28,70 @@ class User(Base):
     # Relationship to students
     students = relationship("Student", back_populates="franchise")
 
+class University(Base):
+    __tablename__ = "university"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, unique=True, index=True)
+    code = Column(String(50), unique=True, nullable=True)
+    location = Column(String(255), nullable=True)
+    accreditation = Column(String(100), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    courses = relationship("Course", back_populates="university", cascade="all, delete-orphan")
+    students = relationship("Student", back_populates="university")
+
+class Course(Base):
+    __tablename__ = "course"
+
+    id = Column(Integer, primary_key=True, index=True)
+    university_id = Column(Integer, ForeignKey("university.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    code = Column(String(50), nullable=True)
+    duration_years = Column(Integer, nullable=True)
+    degree_type = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    university = relationship("University", back_populates="courses")
+    fee = relationship("Fee", back_populates="course", uselist=False, cascade="all, delete-orphan")
+    students = relationship("Student", back_populates="course")
+
+    __table_args__ = (
+        UniqueConstraint('university_id', 'code', name='uq_course_university_code'),
+    )
+
+class Fee(Base):
+    __tablename__ = "fee"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("course.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    tuition_fee = Column(Numeric(10, 2), nullable=False)
+    registration_fee = Column(Numeric(10, 2), nullable=False)
+    exam_fee_yearly = Column(Numeric(10, 2), nullable=False)
+    other_fees = Column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+
+    # PostgreSQL Generated Columns
+    total_first_year = Column(Numeric(10, 2), Computed("tuition_fee + registration_fee + exam_fee_yearly + other_fees", persisted=True))
+    total_yearly = Column(Numeric(10, 2), Computed("tuition_fee + exam_fee_yearly + other_fees", persisted=True))
+
+    currency = Column(String(10), default="INR", nullable=False)
+    academic_year = Column(String(20), nullable=True)
+    effective_from = Column(Date, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    course = relationship("Course", back_populates="fee")
+    students = relationship("Student", back_populates="fee")
+
 class Student(Base):
     __tablename__ = "student"
 
@@ -41,9 +106,7 @@ class Student(Base):
 
     # Academic Details
     previous_class = Column(String, nullable=False)
-    course_applied = Column(String, nullable=False)
     branch_specialization = Column(String, nullable=True)
-    affiliating_university = Column(String, nullable=True)
 
     # Contact & Address
     street_locality = Column(String, nullable=False)
@@ -56,6 +119,17 @@ class Student(Base):
     # Metadata
     franchise_id = Column(Integer, ForeignKey("user.id"), nullable=False)
     franchise = relationship("User", back_populates="students")
+
+    # NEW FK columns for University, Course, Fee
+    university_id = Column(Integer, ForeignKey("university.id", ondelete="SET NULL"), nullable=True, index=True)
+    course_id = Column(Integer, ForeignKey("course.id", ondelete="SET NULL"), nullable=True, index=True)
+    fee_id = Column(Integer, ForeignKey("fee.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # NEW Relationships
+    university = relationship("University", back_populates="students")
+    course = relationship("Course", back_populates="students")
+    fee = relationship("Fee", back_populates="students")
+
     status = Column(SQLEnum(AdmissionStatus), default=AdmissionStatus.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
