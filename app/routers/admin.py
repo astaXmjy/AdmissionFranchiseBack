@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import List, Optional
 from datetime import datetime
@@ -305,7 +305,9 @@ def get_fees(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    query = db.query(Fee)
+    query = db.query(Fee).options(
+        joinedload(Fee.course).joinedload(Course.university)
+    )
 
     if course_id:
         query = query.filter(Fee.course_id == course_id)
@@ -321,7 +323,9 @@ def get_fee(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    fee = db.query(Fee).filter(Fee.id == fee_id).first()
+    fee = db.query(Fee).options(
+        joinedload(Fee.course).joinedload(Course.university)
+    ).filter(Fee.id == fee_id).first()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
     return fee
@@ -332,7 +336,9 @@ def get_fee_by_course(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    fee = db.query(Fee).filter(Fee.course_id == course_id).first()
+    fee = db.query(Fee).options(
+        joinedload(Fee.course).joinedload(Course.university)
+    ).filter(Fee.course_id == course_id).first()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee structure not found for this course")
     return fee

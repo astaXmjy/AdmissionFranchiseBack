@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typing import Optional, List
 from datetime import datetime, date
 from decimal import Decimal
@@ -206,9 +206,19 @@ class FeeUpdate(BaseModel):
     effective_from: Optional[date] = None
     is_active: Optional[bool] = None
 
+class CourseInFeeResponse(BaseModel):
+    id: int
+    name: str
+    code: Optional[str]
+    university: UniversityResponse
+
+    class Config:
+        from_attributes = True
+
 class FeeResponse(BaseModel):
     id: int
     course_id: int
+    course: Optional[CourseInFeeResponse] = None
     tuition_fee: Decimal
     registration_fee: Decimal
     exam_fee_yearly: Decimal
@@ -221,6 +231,12 @@ class FeeResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def total_fee(self) -> Decimal:
+        """Alias for total_first_year for frontend compatibility"""
+        return self.total_first_year
 
     class Config:
         from_attributes = True
