@@ -10,6 +10,21 @@ class UserCreate(BaseModel):
     password: str
     role: UserRole
     full_name: str
+    address: Optional[str] = None
+    gst_number: Optional[str] = None
+    pan_number: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+    address: Optional[str] = None
+    gst_number: Optional[str] = None
+    pan_number: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: int
@@ -18,6 +33,11 @@ class UserResponse(BaseModel):
     full_name: str
     created_at: datetime
     is_active: bool
+    address: Optional[str] = None
+    gst_number: Optional[str] = None
+    pan_number: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -29,37 +49,99 @@ class Token(BaseModel):
 
 # Student schemas
 class StudentCreate(BaseModel):
-    student_name: str = Field(..., min_length=1)
+    first_name: str = Field(..., min_length=1)
+    middle_name: Optional[str] = None
+    last_name: str = Field(..., min_length=1)
+    dob: date
+    email: Optional[str] = None
     father_name: str = Field(..., min_length=1)
     mother_name: str = Field(..., min_length=1)
-    previous_class: str = Field(..., min_length=1)
 
-    # NEW: Replace course_applied and affiliating_university with FKs
+    # Academic Details
+    degree_type: str = Field(..., min_length=1)  # UG, PG, Diploma
+    previous_class: Optional[str] = None
     university_id: int
     course_id: int
-    # fee_id will be auto-derived from course
-
     branch_specialization: Optional[str] = None
+    skills: Optional[str] = None
+
+    # 10th Details
+    tenth_board: Optional[str] = None
+    tenth_board_other: Optional[str] = None
+    tenth_school: Optional[str] = None
+    tenth_passing_year: Optional[str] = None
+    tenth_percentage: Optional[str] = None
+
+    # 12th Details (for UG and PG)
+    twelfth_board: Optional[str] = None
+    twelfth_board_other: Optional[str] = None
+    twelfth_school: Optional[str] = None
+    twelfth_passing_year: Optional[str] = None
+    twelfth_percentage: Optional[str] = None
+
+    # Graduation Details (for PG)
+    grad_university: Optional[str] = None
+    grad_degree: Optional[str] = None
+    grad_passing_year: Optional[str] = None
+    grad_percentage: Optional[str] = None
+    grad_subject: Optional[str] = None
+
+    # Contact & Address
     street_locality: str = Field(..., min_length=1)
     city: str = Field(..., min_length=1)
     state: str = Field(..., min_length=1)
     pincode: str = Field(..., min_length=1)
     contact_number: str = Field(..., min_length=1)
-    aadhar_number: str = Field(..., min_length=12, max_length=12)  # 12 digits
+    aadhar_number: str = Field(..., min_length=12, max_length=12)
 
 class StudentResponse(BaseModel):
     id: int
-    student_name: str
+    first_name: str
+    middle_name: Optional[str]
+    last_name: str
+    dob: date
+    email: Optional[str]
     father_name: str
     mother_name: str
-    previous_class: str
-    # New FK relationships
+
+    # Academic Details
+    degree_type: Optional[str] = None
+    previous_class: Optional[str] = None
     university_id: Optional[int]
     university_name: Optional[str]
     course_id: Optional[int]
     course_name: Optional[str]
     fee_id: Optional[int]
     branch_specialization: Optional[str]
+    skills: Optional[str] = None
+
+    # 10th Details
+    tenth_board: Optional[str] = None
+    tenth_board_other: Optional[str] = None
+    tenth_school: Optional[str] = None
+    tenth_passing_year: Optional[str] = None
+    tenth_percentage: Optional[str] = None
+
+    # 12th Details
+    twelfth_board: Optional[str] = None
+    twelfth_board_other: Optional[str] = None
+    twelfth_school: Optional[str] = None
+    twelfth_passing_year: Optional[str] = None
+    twelfth_percentage: Optional[str] = None
+
+    # Graduation Details
+    grad_university: Optional[str] = None
+    grad_degree: Optional[str] = None
+    grad_passing_year: Optional[str] = None
+    grad_percentage: Optional[str] = None
+    grad_subject: Optional[str] = None
+
+    # Fee & Commission
+    total_fee: Optional[Decimal] = None
+    commission_percentage: Optional[Decimal] = None
+    commission_amount: Optional[Decimal] = None
+
+    # Contact & Address
     street_locality: str
     city: str
     state: str
@@ -87,13 +169,17 @@ class StudentFilter(DateFilter):
 # Status update schema
 class StatusUpdate(BaseModel):
     status: AdmissionStatus
+    commission_percentage: Optional[Decimal] = None
+
+class CommissionUpdate(BaseModel):
+    commission_percentage: Decimal = Field(..., ge=0, le=100)
 
 # Statistics schemas
 class StudentStats(BaseModel):
     total: int
     pending: int
-    confirmed: int
-    rejected: int
+    approved: int
+    failed: int
 
 class FranchiseStats(BaseModel):
     id: int
@@ -101,10 +187,15 @@ class FranchiseStats(BaseModel):
     full_name: str
     total_students: int
     pending: int
-    confirmed: int
-    rejected: int
+    approved: int
+    failed: int
     created_at: datetime
     is_active: bool
+    address: Optional[str] = None
+    gst_number: Optional[str] = None
+    pan_number: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
 
 # ===== UNIVERSITY SCHEMAS =====
 class UniversityCreate(BaseModel):

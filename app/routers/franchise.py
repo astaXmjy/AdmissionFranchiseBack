@@ -29,14 +29,19 @@ def get_universities_for_select(
 @router.get("/courses/select/{university_id}", response_model=List[CourseSelectResponse])
 def get_courses_for_select(
     university_id: int,
+    degree_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
     """Get active courses for dropdown selection by university"""
-    courses = db.query(Course).filter(
+    DEGREE_MAP = {"UG": "Undergraduate", "PG": "Postgraduate", "Diploma": "Diploma"}
+    query = db.query(Course).filter(
         Course.university_id == university_id,
         Course.is_active == True
-    ).all()
+    )
+    if degree_type and degree_type in DEGREE_MAP:
+        query = query.filter(Course.degree_type == DEGREE_MAP[degree_type])
+    courses = query.all()
     return courses
 
 @router.post("/students", response_model=StudentResponse)
@@ -63,14 +68,35 @@ def create_student(
 
     # Create student record
     student = Student(
-        student_name=student_data.student_name,
+        first_name=student_data.first_name,
+        middle_name=student_data.middle_name,
+        last_name=student_data.last_name,
+        dob=student_data.dob,
+        email=student_data.email,
         father_name=student_data.father_name,
         mother_name=student_data.mother_name,
+        degree_type=student_data.degree_type,
         previous_class=student_data.previous_class,
         university_id=student_data.university_id,
         course_id=student_data.course_id,
         fee_id=fee.id if fee else None,
         branch_specialization=student_data.branch_specialization,
+        skills=student_data.skills,
+        tenth_board=student_data.tenth_board,
+        tenth_board_other=student_data.tenth_board_other,
+        tenth_school=student_data.tenth_school,
+        tenth_passing_year=student_data.tenth_passing_year,
+        tenth_percentage=student_data.tenth_percentage,
+        twelfth_board=student_data.twelfth_board,
+        twelfth_board_other=student_data.twelfth_board_other,
+        twelfth_school=student_data.twelfth_school,
+        twelfth_passing_year=student_data.twelfth_passing_year,
+        twelfth_percentage=student_data.twelfth_percentage,
+        grad_university=student_data.grad_university,
+        grad_degree=student_data.grad_degree,
+        grad_passing_year=student_data.grad_passing_year,
+        grad_percentage=student_data.grad_percentage,
+        grad_subject=student_data.grad_subject,
         street_locality=student_data.street_locality,
         city=student_data.city,
         state=student_data.state,
@@ -86,9 +112,14 @@ def create_student(
     # Return response with franchise name and related data
     return StudentResponse(
         id=student.id,
-        student_name=student.student_name,
+        first_name=student.first_name,
+        middle_name=student.middle_name,
+        last_name=student.last_name,
+        dob=student.dob,
+        email=student.email,
         father_name=student.father_name,
         mother_name=student.mother_name,
+        degree_type=student.degree_type,
         previous_class=student.previous_class,
         university_id=student.university_id,
         university_name=university.name,
@@ -96,6 +127,25 @@ def create_student(
         course_name=course.name,
         fee_id=student.fee_id,
         branch_specialization=student.branch_specialization,
+        skills=student.skills,
+        tenth_board=student.tenth_board,
+        tenth_board_other=student.tenth_board_other,
+        tenth_school=student.tenth_school,
+        tenth_passing_year=student.tenth_passing_year,
+        tenth_percentage=student.tenth_percentage,
+        twelfth_board=student.twelfth_board,
+        twelfth_board_other=student.twelfth_board_other,
+        twelfth_school=student.twelfth_school,
+        twelfth_passing_year=student.twelfth_passing_year,
+        twelfth_percentage=student.twelfth_percentage,
+        grad_university=student.grad_university,
+        grad_degree=student.grad_degree,
+        grad_passing_year=student.grad_passing_year,
+        grad_percentage=student.grad_percentage,
+        grad_subject=student.grad_subject,
+        total_fee=fee.total_first_year if fee else None,
+        commission_percentage=student.commission_percentage,
+        commission_amount=student.commission_amount,
         street_locality=student.street_locality,
         city=student.city,
         state=student.state,
@@ -120,7 +170,8 @@ def get_my_students(
 
     query = db.query(Student).options(
         selectinload(Student.university),
-        selectinload(Student.course)
+        selectinload(Student.course),
+        selectinload(Student.fee)
     ).filter(Student.franchise_id == current_franchise.id)
 
     if start_date:
@@ -135,9 +186,14 @@ def get_my_students(
     for student in students:
         student_responses.append(StudentResponse(
             id=student.id,
-            student_name=student.student_name,
+            first_name=student.first_name,
+            middle_name=student.middle_name,
+            last_name=student.last_name,
+            dob=student.dob,
+            email=student.email,
             father_name=student.father_name,
             mother_name=student.mother_name,
+            degree_type=student.degree_type,
             previous_class=student.previous_class,
             university_id=student.university_id,
             university_name=student.university.name if student.university else None,
@@ -145,6 +201,25 @@ def get_my_students(
             course_name=student.course.name if student.course else None,
             fee_id=student.fee_id,
             branch_specialization=student.branch_specialization,
+            skills=student.skills,
+            tenth_board=student.tenth_board,
+            tenth_board_other=student.tenth_board_other,
+            tenth_school=student.tenth_school,
+            tenth_passing_year=student.tenth_passing_year,
+            tenth_percentage=student.tenth_percentage,
+            twelfth_board=student.twelfth_board,
+            twelfth_board_other=student.twelfth_board_other,
+            twelfth_school=student.twelfth_school,
+            twelfth_passing_year=student.twelfth_passing_year,
+            twelfth_percentage=student.twelfth_percentage,
+            grad_university=student.grad_university,
+            grad_degree=student.grad_degree,
+            grad_passing_year=student.grad_passing_year,
+            grad_percentage=student.grad_percentage,
+            grad_subject=student.grad_subject,
+            total_fee=student.fee.total_first_year if student.fee else None,
+            commission_percentage=student.commission_percentage,
+            commission_amount=student.commission_amount,
             street_locality=student.street_locality,
             city=student.city,
             state=student.state,
@@ -176,21 +251,21 @@ def get_my_statistics(
         Student.status == AdmissionStatus.PENDING
     ).scalar()
 
-    confirmed = db.query(func.count(Student.id)).filter(
+    approved = db.query(func.count(Student.id)).filter(
         Student.franchise_id == current_franchise.id,
-        Student.status == AdmissionStatus.CONFIRMED
+        Student.status == AdmissionStatus.APPROVED
     ).scalar()
 
-    rejected = db.query(func.count(Student.id)).filter(
+    failed = db.query(func.count(Student.id)).filter(
         Student.franchise_id == current_franchise.id,
-        Student.status == AdmissionStatus.REJECTED
+        Student.status == AdmissionStatus.FAILED
     ).scalar()
 
     return StudentStats(
         total=total,
         pending=pending,
-        confirmed=confirmed,
-        rejected=rejected
+        approved=approved,
+        failed=failed
     )
 
 @router.get("/students/csv")
@@ -220,7 +295,8 @@ def export_students_csv(
 
     # Write header
     writer.writerow([
-        'ID', 'Student Name', 'Father Name', 'Mother Name', 'Previous Class',
+        'ID', 'First Name', 'Middle Name', 'Last Name', 'DOB', 'Email',
+        'Father Name', 'Mother Name', 'Previous Class',
         'University', 'Course', 'Branch/Specialization',
         'Street/Locality', 'City', 'State', 'Pincode', 'Contact Number', 'Aadhar Number',
         'Franchise', 'Status', 'Created At', 'Updated At'
@@ -230,7 +306,11 @@ def export_students_csv(
     for student in students:
         writer.writerow([
             student.id,
-            student.student_name,
+            student.first_name,
+            student.middle_name or '',
+            student.last_name,
+            student.dob.isoformat() if student.dob else '',
+            student.email or '',
             student.father_name,
             student.mother_name,
             student.previous_class,

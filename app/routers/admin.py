@@ -10,8 +10,8 @@ from ..database import get_db
 from ..auth import get_current_admin, get_password_hash
 from ..models import User, Student, University, Course, Fee
 from ..schemas import (
-    UserCreate, UserResponse, StudentListResponse, StudentResponse,
-    StudentFilter, StatusUpdate, StudentStats, FranchiseStats,
+    UserCreate, UserUpdate, UserResponse, StudentListResponse, StudentResponse,
+    StudentFilter, StatusUpdate, CommissionUpdate, StudentStats, FranchiseStats,
     UniversityCreate, UniversityUpdate, UniversityResponse, UniversitySelectResponse,
     CourseCreate, CourseUpdate, CourseResponse, CourseSelectResponse, CourseWithFeeResponse,
     FeeCreate, FeeUpdate, FeeResponse
@@ -38,7 +38,12 @@ def create_franchise(
         username=user_data.username,
         password_hash=hashed_password,
         role=user_data.role,
-        full_name=user_data.full_name
+        full_name=user_data.full_name,
+        address=user_data.address,
+        gst_number=user_data.gst_number,
+        pan_number=user_data.pan_number,
+        phone_number=user_data.phone_number,
+        email=user_data.email
     )
     db.add(franchise)
     db.commit()
@@ -52,6 +57,55 @@ def get_franchises(
 ):
     franchises = db.query(User).filter(User.role == "franchise").all()
     return franchises
+
+@router.patch("/franchises/{franchise_id}", response_model=UserResponse)
+def update_franchise(
+    franchise_id: int,
+    user_data: UserUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    franchise = db.query(User).filter(User.id == franchise_id, User.role == "franchise").first()
+    if not franchise:
+        raise HTTPException(status_code=404, detail="Franchise not found")
+
+    update_data = user_data.dict(exclude_unset=True)
+
+    # Handle password separately - hash it
+    if "password" in update_data:
+        password = update_data.pop("password")
+        if password:
+            franchise.password_hash = get_password_hash(password)
+
+    # Update remaining fields
+    for field, value in update_data.items():
+        setattr(franchise, field, value)
+
+    db.commit()
+    db.refresh(franchise)
+    return franchise
+
+@router.delete("/franchises/{franchise_id}")
+def delete_franchise(
+    franchise_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    franchise = db.query(User).filter(User.id == franchise_id, User.role == "franchise").first()
+    if not franchise:
+        raise HTTPException(status_code=404, detail="Franchise not found")
+
+    # Check if franchise has students
+    students_count = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise_id).scalar()
+    if students_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete franchise with {students_count} associated students. Deactivate the franchise instead."
+        )
+
+    db.delete(franchise)
+    db.commit()
+    return {"message": "Franchise deleted successfully"}
 
 # ===== UNIVERSITY MANAGEMENT =====
 
@@ -205,14 +259,19 @@ def get_courses(
 @router.get("/courses/select/{university_id}", response_model=List[CourseSelectResponse])
 def get_courses_for_select(
     university_id: int,
+    degree_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
     """Get active courses for dropdown selection by university"""
-    courses = db.query(Course).filter(
+    DEGREE_MAP = {"UG": "Undergraduate", "PG": "Postgraduate", "Diploma": "Diploma"}
+    query = db.query(Course).filter(
         Course.university_id == university_id,
         Course.is_active == True
-    ).all()
+    )
+    if degree_type and degree_type in DEGREE_MAP:
+        query = query.filter(Course.degree_type == DEGREE_MAP[degree_type])
+    courses = query.all()
     return courses
 
 @router.get("/courses/{course_id}", response_model=CourseWithFeeResponse)
@@ -392,7 +451,8 @@ def get_all_students(
     query = db.query(Student).options(
         selectinload(Student.franchise),
         selectinload(Student.university),
-        selectinload(Student.course)
+        selectinload(Student.course),
+        selectinload(Student.fee)
     )
 
     if franchise_id:
@@ -409,9 +469,14 @@ def get_all_students(
     for student in students:
         student_responses.append(StudentResponse(
             id=student.id,
-            student_name=student.student_name,
+            first_name=student.first_name,
+            middle_name=student.middle_name,
+            last_name=student.last_name,
+            dob=student.dob,
+            email=student.email,
             father_name=student.father_name,
             mother_name=student.mother_name,
+            degree_type=student.degree_type,
             previous_class=student.previous_class,
             university_id=student.university_id,
             university_name=student.university.name if student.university else None,
@@ -419,6 +484,25 @@ def get_all_students(
             course_name=student.course.name if student.course else None,
             fee_id=student.fee_id,
             branch_specialization=student.branch_specialization,
+            skills=student.skills,
+            tenth_board=student.tenth_board,
+            tenth_board_other=student.tenth_board_other,
+            tenth_school=student.tenth_school,
+            tenth_passing_year=student.tenth_passing_year,
+            tenth_percentage=student.tenth_percentage,
+            twelfth_board=student.twelfth_board,
+            twelfth_board_other=student.twelfth_board_other,
+            twelfth_school=student.twelfth_school,
+            twelfth_passing_year=student.twelfth_passing_year,
+            twelfth_percentage=student.twelfth_percentage,
+            grad_university=student.grad_university,
+            grad_degree=student.grad_degree,
+            grad_passing_year=student.grad_passing_year,
+            grad_percentage=student.grad_percentage,
+            grad_subject=student.grad_subject,
+            total_fee=student.fee.total_first_year if student.fee else None,
+            commission_percentage=student.commission_percentage,
+            commission_amount=student.commission_amount,
             street_locality=student.street_locality,
             city=student.city,
             state=student.state,
@@ -441,20 +525,64 @@ def update_student_status(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    # Get student
-    student = db.query(Student).filter(Student.id == student_id).first()
+    from decimal import Decimal
+
+    student = db.query(Student).options(
+        joinedload(Student.fee)
+    ).filter(Student.id == student_id).first()
 
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     # Update status
     student.status = status_update.status
+
+    # Handle commission if provided (typically on approval)
+    if status_update.commission_percentage is not None:
+        student.commission_percentage = status_update.commission_percentage
+        if student.fee and student.fee.total_first_year:
+            student.commission_amount = (student.fee.total_first_year * status_update.commission_percentage) / Decimal("100")
+        else:
+            student.commission_amount = Decimal("0.00")
+
     student.updated_at = datetime.utcnow()
 
     db.commit()
     db.refresh(student)
 
     return {"message": "Status updated successfully", "status": student.status.value}
+
+@router.patch("/students/{student_id}/commission")
+def update_student_commission(
+    student_id: int,
+    commission_data: CommissionUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    from decimal import Decimal
+
+    student = db.query(Student).options(
+        joinedload(Student.fee)
+    ).filter(Student.id == student_id).first()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student.commission_percentage = commission_data.commission_percentage
+    if student.fee and student.fee.total_first_year:
+        student.commission_amount = (student.fee.total_first_year * commission_data.commission_percentage) / Decimal("100")
+    else:
+        student.commission_amount = Decimal("0.00")
+
+    student.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(student)
+
+    return {
+        "message": "Commission updated successfully",
+        "commission_percentage": str(student.commission_percentage),
+        "commission_amount": str(student.commission_amount)
+    }
 
 @router.get("/statistics", response_model=StudentStats)
 def get_statistics(
@@ -469,15 +597,15 @@ def get_statistics(
     # Get counts by status
     pending = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.PENDING).scalar()
 
-    confirmed = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.CONFIRMED).scalar()
+    approved = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.APPROVED).scalar()
 
-    rejected = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.REJECTED).scalar()
+    failed = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.FAILED).scalar()
 
     return StudentStats(
         total=total,
         pending=pending,
-        confirmed=confirmed,
-        rejected=rejected
+        approved=approved,
+        failed=failed
     )
 
 @router.get("/franchises/statistics", response_model=List[FranchiseStats])
@@ -500,14 +628,14 @@ def get_franchise_statistics(
             Student.status == AdmissionStatus.PENDING
         ).scalar()
 
-        confirmed = db.query(func.count(Student.id)).filter(
+        approved = db.query(func.count(Student.id)).filter(
             Student.franchise_id == franchise.id,
-            Student.status == AdmissionStatus.CONFIRMED
+            Student.status == AdmissionStatus.APPROVED
         ).scalar()
 
-        rejected = db.query(func.count(Student.id)).filter(
+        failed = db.query(func.count(Student.id)).filter(
             Student.franchise_id == franchise.id,
-            Student.status == AdmissionStatus.REJECTED
+            Student.status == AdmissionStatus.FAILED
         ).scalar()
 
         franchise_stats.append(FranchiseStats(
@@ -516,10 +644,15 @@ def get_franchise_statistics(
             full_name=franchise.full_name,
             total_students=total,
             pending=pending,
-            confirmed=confirmed,
-            rejected=rejected,
+            approved=approved,
+            failed=failed,
             created_at=franchise.created_at,
-            is_active=franchise.is_active
+            is_active=franchise.is_active,
+            address=franchise.address,
+            gst_number=franchise.gst_number,
+            pan_number=franchise.pan_number,
+            phone_number=franchise.phone_number,
+            email=franchise.email
         ))
 
     return franchise_stats
@@ -555,7 +688,8 @@ def export_all_students_csv(
 
     # Write header
     writer.writerow([
-        'ID', 'Student Name', 'Father Name', 'Mother Name', 'Previous Class',
+        'ID', 'First Name', 'Middle Name', 'Last Name', 'DOB', 'Email',
+        'Father Name', 'Mother Name', 'Previous Class',
         'University', 'Course', 'Branch/Specialization',
         'Street/Locality', 'City', 'State', 'Pincode', 'Contact Number', 'Aadhar Number',
         'Franchise ID', 'Franchise Name', 'Status', 'Created At', 'Updated At'
@@ -565,7 +699,11 @@ def export_all_students_csv(
     for student in students:
         writer.writerow([
             student.id,
-            student.student_name,
+            student.first_name,
+            student.middle_name or '',
+            student.last_name,
+            student.dob.isoformat() if student.dob else '',
+            student.email or '',
             student.father_name,
             student.mother_name,
             student.previous_class,

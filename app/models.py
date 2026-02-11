@@ -10,9 +10,9 @@ class UserRole(str, Enum):
     FRANCHISE = "franchise"
 
 class AdmissionStatus(str, Enum):
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    REJECTED = "rejected"
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    FAILED = "FAILED"
 
 class User(Base):
     __tablename__ = "user"
@@ -24,6 +24,11 @@ class User(Base):
     full_name = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+    address = Column(String, nullable=True)
+    gst_number = Column(String(15), nullable=True)
+    pan_number = Column(String(10), nullable=True)
+    phone_number = Column(String(15), nullable=True)
+    email = Column(String, nullable=True)
 
     # Relationship to students
     students = relationship("Student", back_populates="franchise")
@@ -98,15 +103,46 @@ class Student(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Student Details
-    student_name = Column(String, nullable=False)
+    first_name = Column(String, nullable=False)
+    middle_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=False)
+    dob = Column(Date, nullable=False)
+    email = Column(String, nullable=True)
 
     # Family Details
     father_name = Column(String, nullable=False)
     mother_name = Column(String, nullable=False)
 
     # Academic Details
-    previous_class = Column(String, nullable=False)
+    degree_type = Column(String(20), nullable=True)  # UG, PG, Diploma
+    previous_class = Column(String, nullable=True)
     branch_specialization = Column(String, nullable=True)
+    skills = Column(Text, nullable=True)
+
+    # 10th Details
+    tenth_board = Column(String(50), nullable=True)  # MP Board, CBSE, Others
+    tenth_board_other = Column(String(100), nullable=True)
+    tenth_school = Column(String(255), nullable=True)
+    tenth_passing_year = Column(String(4), nullable=True)
+    tenth_percentage = Column(String(10), nullable=True)
+
+    # 12th Details (for UG and PG)
+    twelfth_board = Column(String(50), nullable=True)
+    twelfth_board_other = Column(String(100), nullable=True)
+    twelfth_school = Column(String(255), nullable=True)
+    twelfth_passing_year = Column(String(4), nullable=True)
+    twelfth_percentage = Column(String(10), nullable=True)
+
+    # Graduation Details (for PG)
+    grad_university = Column(String(255), nullable=True)
+    grad_degree = Column(String(255), nullable=True)
+    grad_passing_year = Column(String(4), nullable=True)
+    grad_percentage = Column(String(10), nullable=True)
+    grad_subject = Column(String(255), nullable=True)
+
+    # Commission
+    commission_percentage = Column(Numeric(5, 2), nullable=True)
+    commission_amount = Column(Numeric(10, 2), nullable=True)
 
     # Contact & Address
     street_locality = Column(String, nullable=False)
