@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional
 from datetime import datetime
@@ -8,13 +8,14 @@ import csv
 import io
 from ..database import get_db
 from ..auth import get_current_admin, get_password_hash
-from ..models import User, Student, University, Course, Fee
+from ..models import User, Student, University, Course, CourseVariant, Fee
 from ..schemas import (
     UserCreate, UserUpdate, UserResponse, StudentListResponse, StudentResponse,
     StudentFilter, StatusUpdate, CommissionUpdate, StudentStats, FranchiseStats,
     UniversityCreate, UniversityUpdate, UniversityResponse, UniversitySelectResponse,
     CourseCreate, CourseUpdate, CourseResponse, CourseSelectResponse, CourseWithFeeResponse,
-    FeeCreate, FeeUpdate, FeeResponse
+    FeeCreate, FeeUpdate, FeeResponse,
+    CourseVariantResponse
 )
 
 router = APIRouter()
@@ -27,12 +28,10 @@ def create_franchise(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    # Check if username already exists
     existing_user = db.query(User).filter(User.username == user_data.username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already registered")
 
-    # Create franchise user
     hashed_password = get_password_hash(user_data.password)
     franchise = User(
         username=user_data.username,
@@ -71,13 +70,11 @@ def update_franchise(
 
     update_data = user_data.dict(exclude_unset=True)
 
-    # Handle password separately - hash it
     if "password" in update_data:
         password = update_data.pop("password")
         if password:
             franchise.password_hash = get_password_hash(password)
 
-    # Update remaining fields
     for field, value in update_data.items():
         setattr(franchise, field, value)
 
@@ -95,7 +92,6 @@ def delete_franchise(
     if not franchise:
         raise HTTPException(status_code=404, detail="Franchise not found")
 
-    # Check if franchise has students
     students_count = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise_id).scalar()
     if students_count > 0:
         raise HTTPException(
@@ -115,12 +111,10 @@ def create_university(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    # Check if university name already exists
     existing = db.query(University).filter(University.name == university_data.name).first()
     if existing:
         raise HTTPException(status_code=400, detail="University with this name already exists")
 
-    # Check if code already exists (if provided)
     if university_data.code:
         existing_code = db.query(University).filter(University.code == university_data.code).first()
         if existing_code:
@@ -149,7 +143,6 @@ def get_universities_for_select(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get active universities for dropdown selection"""
     universities = db.query(University).filter(University.is_active == True).all()
     return universities
 
@@ -175,7 +168,6 @@ def update_university(
     if not university:
         raise HTTPException(status_code=404, detail="University not found")
 
-    # Update only provided fields
     for field, value in university_data.dict(exclude_unset=True).items():
         setattr(university, field, value)
 
@@ -194,7 +186,6 @@ def delete_university(
     if not university:
         raise HTTPException(status_code=404, detail="University not found")
 
-    # Check if university has courses
     courses_count = db.query(func.count(Course.id)).filter(Course.university_id == university_id).scalar()
     if courses_count > 0:
         raise HTTPException(
@@ -214,12 +205,10 @@ def create_course(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    # Check if university exists
     university = db.query(University).filter(University.id == course_data.university_id).first()
     if not university:
         raise HTTPException(status_code=404, detail="University not found")
 
-    # Check if course code already exists for this university (if provided)
     if course_data.code:
         existing = db.query(Course).filter(
             Course.university_id == course_data.university_id,
@@ -228,8 +217,21 @@ def create_course(
         if existing:
             raise HTTPException(status_code=400, detail="Course with this code already exists for this university")
 
-    course = Course(**course_data.dict())
+    # Create the course (exclude course_types which is not a column)
+    course_dict = course_data.dict(exclude={"course_types"})
+    # Convert eligible_education list to comma-separated string
+    if course_dict.get("eligible_education") and isinstance(course_dict["eligible_education"], list):
+        course_dict["eligible_education"] = ",".join(course_dict["eligible_education"])
+    course = Course(**course_dict)
     db.add(course)
+    db.flush()  # Get the course ID
+
+    # Auto-create variants from course_types
+    if course_data.course_types:
+        for ct in course_data.course_types:
+            variant = CourseVariant(course_id=course.id, course_type=ct)
+            db.add(variant)
+
     db.commit()
     db.refresh(course)
     return course
@@ -241,11 +243,9 @@ def get_courses(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    from sqlalchemy.orm import selectinload
-
     query = db.query(Course).options(
         selectinload(Course.university),
-        selectinload(Course.fee)
+        selectinload(Course.variants).selectinload(CourseVariant.fee)
     )
 
     if university_id:
@@ -264,13 +264,15 @@ def get_courses_for_select(
     current_admin: User = Depends(get_current_admin)
 ):
     """Get active courses for dropdown selection by university"""
-    DEGREE_MAP = {"UG": "Undergraduate", "PG": "Postgraduate", "Diploma": "Diploma"}
-    query = db.query(Course).filter(
+    DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
+    query = db.query(Course).options(
+        selectinload(Course.variants)
+    ).filter(
         Course.university_id == university_id,
         Course.is_active == True
     )
     if degree_type and degree_type in DEGREE_MAP:
-        query = query.filter(Course.degree_type == DEGREE_MAP[degree_type])
+        query = query.filter(Course.degree_type.in_(DEGREE_MAP[degree_type]))
     courses = query.all()
     return courses
 
@@ -280,11 +282,9 @@ def get_course(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    from sqlalchemy.orm import selectinload
-
     course = db.query(Course).options(
         selectinload(Course.university),
-        selectinload(Course.fee)
+        selectinload(Course.variants).selectinload(CourseVariant.fee)
     ).filter(Course.id == course_id).first()
 
     if not course:
@@ -298,13 +298,39 @@ def update_course(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    course = db.query(Course).filter(Course.id == course_id).first()
+    course = db.query(Course).options(
+        selectinload(Course.variants)
+    ).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # Update only provided fields
-    for field, value in course_data.dict(exclude_unset=True).items():
+    update_dict = course_data.dict(exclude_unset=True)
+    course_types = update_dict.pop("course_types", None)
+
+    # Convert eligible_education list to comma-separated string
+    if "eligible_education" in update_dict and isinstance(update_dict["eligible_education"], list):
+        update_dict["eligible_education"] = ",".join(update_dict["eligible_education"])
+
+    # Update course fields
+    for field, value in update_dict.items():
         setattr(course, field, value)
+
+    # Update variants if course_types provided
+    if course_types is not None:
+        existing_types = {v.course_type for v in course.variants}
+        new_types = set(course_types)
+
+        # Add new variants
+        for ct in new_types - existing_types:
+            variant = CourseVariant(course_id=course.id, course_type=ct)
+            db.add(variant)
+
+        # Deactivate removed variants (don't delete — they may have fees/students)
+        for variant in course.variants:
+            if variant.course_type not in new_types:
+                variant.is_active = False
+            else:
+                variant.is_active = True
 
     course.updated_at = datetime.utcnow()
     db.commit()
@@ -321,7 +347,6 @@ def delete_course(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # Check if course has students
     students_count = db.query(func.count(Student.id)).filter(Student.course_id == course_id).scalar()
     if students_count > 0:
         raise HTTPException(
@@ -333,6 +358,21 @@ def delete_course(
     db.commit()
     return {"message": "Course deleted successfully"}
 
+# ===== COURSE VARIANT MANAGEMENT =====
+
+@router.get("/courses/{course_id}/variants", response_model=List[CourseVariantResponse])
+def get_course_variants(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Get all variants for a course"""
+    variants = db.query(CourseVariant).filter(
+        CourseVariant.course_id == course_id,
+        CourseVariant.is_active == True
+    ).all()
+    return variants
+
 # ===== FEE MANAGEMENT =====
 
 @router.post("/fees", response_model=FeeResponse)
@@ -341,20 +381,27 @@ def create_fee(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    # Check if course exists
-    course = db.query(Course).filter(Course.id == fee_data.course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    # Check if course variant exists
+    variant = db.query(CourseVariant).options(
+        joinedload(CourseVariant.course).joinedload(Course.university)
+    ).filter(CourseVariant.id == fee_data.course_variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Course variant not found")
 
-    # Check if fee already exists for this course
-    existing_fee = db.query(Fee).filter(Fee.course_id == fee_data.course_id).first()
+    # Check if fee already exists for this variant
+    existing_fee = db.query(Fee).filter(Fee.course_variant_id == fee_data.course_variant_id).first()
     if existing_fee:
-        raise HTTPException(status_code=400, detail="Fee structure already exists for this course. Use update instead.")
+        raise HTTPException(status_code=400, detail="Fee structure already exists for this course variant. Use update instead.")
 
     fee = Fee(**fee_data.dict())
     db.add(fee)
     db.commit()
     db.refresh(fee)
+
+    # Reload with relationships
+    fee = db.query(Fee).options(
+        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
+    ).filter(Fee.id == fee.id).first()
     return fee
 
 @router.get("/fees", response_model=List[FeeResponse])
@@ -365,11 +412,11 @@ def get_fees(
     current_admin: User = Depends(get_current_admin)
 ):
     query = db.query(Fee).options(
-        joinedload(Fee.course).joinedload(Course.university)
+        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
     )
 
     if course_id:
-        query = query.filter(Fee.course_id == course_id)
+        query = query.join(CourseVariant).filter(CourseVariant.course_id == course_id)
     if is_active is not None:
         query = query.filter(Fee.is_active == is_active)
 
@@ -383,23 +430,10 @@ def get_fee(
     current_admin: User = Depends(get_current_admin)
 ):
     fee = db.query(Fee).options(
-        joinedload(Fee.course).joinedload(Course.university)
+        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
     ).filter(Fee.id == fee_id).first()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
-    return fee
-
-@router.get("/fees/by-course/{course_id}", response_model=FeeResponse)
-def get_fee_by_course(
-    course_id: int,
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
-):
-    fee = db.query(Fee).options(
-        joinedload(Fee.course).joinedload(Course.university)
-    ).filter(Fee.course_id == course_id).first()
-    if not fee:
-        raise HTTPException(status_code=404, detail="Fee structure not found for this course")
     return fee
 
 @router.patch("/fees/{fee_id}", response_model=FeeResponse)
@@ -413,7 +447,6 @@ def update_fee(
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
 
-    # Update only provided fields
     for field, value in fee_data.dict(exclude_unset=True).items():
         setattr(fee, field, value)
 
@@ -438,6 +471,59 @@ def delete_fee(
 
 # ===== STUDENT MANAGEMENT =====
 
+def build_student_response(student):
+    """Helper to build StudentResponse from a Student model instance."""
+    return StudentResponse(
+        id=student.id,
+        first_name=student.first_name,
+        middle_name=student.middle_name,
+        last_name=student.last_name,
+        dob=student.dob,
+        email=student.email,
+        father_name=student.father_name,
+        mother_name=student.mother_name,
+        degree_type=student.degree_type,
+        previous_class=student.previous_class,
+        university_id=student.university_id,
+        university_name=student.university.name if student.university else None,
+        course_id=student.course_id,
+        course_name=student.course.name if student.course else None,
+        course_variant_id=student.course_variant_id,
+        course_type=student.course_variant.course_type if student.course_variant else None,
+        fee_id=student.fee_id,
+        branch_specialization=student.branch_specialization,
+        skills=student.skills,
+        tenth_board=student.tenth_board,
+        tenth_board_other=student.tenth_board_other,
+        tenth_school=student.tenth_school,
+        tenth_passing_year=student.tenth_passing_year,
+        tenth_percentage=student.tenth_percentage,
+        twelfth_board=student.twelfth_board,
+        twelfth_board_other=student.twelfth_board_other,
+        twelfth_school=student.twelfth_school,
+        twelfth_passing_year=student.twelfth_passing_year,
+        twelfth_percentage=student.twelfth_percentage,
+        grad_university=student.grad_university,
+        grad_degree=student.grad_degree,
+        grad_passing_year=student.grad_passing_year,
+        grad_percentage=student.grad_percentage,
+        grad_subject=student.grad_subject,
+        total_fee=student.fee.total_first_year if student.fee else None,
+        commission_percentage=student.commission_percentage,
+        commission_amount=student.commission_amount,
+        street_locality=student.street_locality,
+        city=student.city,
+        state=student.state,
+        pincode=student.pincode,
+        contact_number=student.contact_number,
+        aadhar_number=student.aadhar_number,
+        franchise_id=student.franchise_id,
+        franchise_name=student.franchise.full_name,
+        status=student.status.value,
+        created_at=student.created_at,
+        updated_at=student.updated_at
+    )
+
 @router.get("/students", response_model=StudentListResponse)
 def get_all_students(
     franchise_id: Optional[int] = None,
@@ -446,12 +532,11 @@ def get_all_students(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    from sqlalchemy.orm import selectinload
-
     query = db.query(Student).options(
         selectinload(Student.franchise),
         selectinload(Student.university),
         selectinload(Student.course),
+        selectinload(Student.course_variant),
         selectinload(Student.fee)
     )
 
@@ -463,59 +548,7 @@ def get_all_students(
         query = query.filter(Student.created_at <= end_date)
 
     students = query.all()
-
-    # Convert to response format
-    student_responses = []
-    for student in students:
-        student_responses.append(StudentResponse(
-            id=student.id,
-            first_name=student.first_name,
-            middle_name=student.middle_name,
-            last_name=student.last_name,
-            dob=student.dob,
-            email=student.email,
-            father_name=student.father_name,
-            mother_name=student.mother_name,
-            degree_type=student.degree_type,
-            previous_class=student.previous_class,
-            university_id=student.university_id,
-            university_name=student.university.name if student.university else None,
-            course_id=student.course_id,
-            course_name=student.course.name if student.course else None,
-            fee_id=student.fee_id,
-            branch_specialization=student.branch_specialization,
-            skills=student.skills,
-            tenth_board=student.tenth_board,
-            tenth_board_other=student.tenth_board_other,
-            tenth_school=student.tenth_school,
-            tenth_passing_year=student.tenth_passing_year,
-            tenth_percentage=student.tenth_percentage,
-            twelfth_board=student.twelfth_board,
-            twelfth_board_other=student.twelfth_board_other,
-            twelfth_school=student.twelfth_school,
-            twelfth_passing_year=student.twelfth_passing_year,
-            twelfth_percentage=student.twelfth_percentage,
-            grad_university=student.grad_university,
-            grad_degree=student.grad_degree,
-            grad_passing_year=student.grad_passing_year,
-            grad_percentage=student.grad_percentage,
-            grad_subject=student.grad_subject,
-            total_fee=student.fee.total_first_year if student.fee else None,
-            commission_percentage=student.commission_percentage,
-            commission_amount=student.commission_amount,
-            street_locality=student.street_locality,
-            city=student.city,
-            state=student.state,
-            pincode=student.pincode,
-            contact_number=student.contact_number,
-            aadhar_number=student.aadhar_number,
-            franchise_id=student.franchise_id,
-            franchise_name=student.franchise.full_name,
-            status=student.status.value,
-            created_at=student.created_at,
-            updated_at=student.updated_at
-        ))
-
+    student_responses = [build_student_response(s) for s in students]
     return StudentListResponse(students=student_responses, total=len(student_responses))
 
 @router.patch("/students/{student_id}/status")
@@ -534,10 +567,8 @@ def update_student_status(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Update status
     student.status = status_update.status
 
-    # Handle commission if provided (typically on approval)
     if status_update.commission_percentage is not None:
         student.commission_percentage = status_update.commission_percentage
         if student.fee and student.fee.total_first_year:
@@ -591,22 +622,12 @@ def get_statistics(
 ):
     from ..models import AdmissionStatus
 
-    # Get total students
     total = db.query(func.count(Student.id)).scalar()
-
-    # Get counts by status
     pending = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.PENDING).scalar()
-
     approved = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.APPROVED).scalar()
-
     failed = db.query(func.count(Student.id)).filter(Student.status == AdmissionStatus.FAILED).scalar()
 
-    return StudentStats(
-        total=total,
-        pending=pending,
-        approved=approved,
-        failed=failed
-    )
+    return StudentStats(total=total, pending=pending, approved=approved, failed=failed)
 
 @router.get("/franchises/statistics", response_model=List[FranchiseStats])
 def get_franchise_statistics(
@@ -615,28 +636,14 @@ def get_franchise_statistics(
 ):
     from ..models import AdmissionStatus
 
-    # Get all franchises
     franchises = db.query(User).filter(User.role == "franchise").all()
 
     franchise_stats = []
     for franchise in franchises:
-        # Get student counts for this franchise
         total = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise.id).scalar()
-
-        pending = db.query(func.count(Student.id)).filter(
-            Student.franchise_id == franchise.id,
-            Student.status == AdmissionStatus.PENDING
-        ).scalar()
-
-        approved = db.query(func.count(Student.id)).filter(
-            Student.franchise_id == franchise.id,
-            Student.status == AdmissionStatus.APPROVED
-        ).scalar()
-
-        failed = db.query(func.count(Student.id)).filter(
-            Student.franchise_id == franchise.id,
-            Student.status == AdmissionStatus.FAILED
-        ).scalar()
+        pending = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise.id, Student.status == AdmissionStatus.PENDING).scalar()
+        approved = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise.id, Student.status == AdmissionStatus.APPROVED).scalar()
+        failed = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise.id, Student.status == AdmissionStatus.FAILED).scalar()
 
         franchise_stats.append(FranchiseStats(
             id=franchise.id,
@@ -665,12 +672,11 @@ def export_all_students_csv(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    from sqlalchemy.orm import selectinload
-
     query = db.query(Student).options(
         selectinload(Student.franchise),
         selectinload(Student.university),
-        selectinload(Student.course)
+        selectinload(Student.course),
+        selectinload(Student.course_variant)
     )
 
     if franchise_id:
@@ -682,20 +688,17 @@ def export_all_students_csv(
 
     students = query.all()
 
-    # Create CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
 
-    # Write header
     writer.writerow([
         'ID', 'First Name', 'Middle Name', 'Last Name', 'DOB', 'Email',
         'Father Name', 'Mother Name', 'Previous Class',
-        'University', 'Course', 'Branch/Specialization',
+        'University', 'Course', 'Course Type', 'Branch/Specialization',
         'Street/Locality', 'City', 'State', 'Pincode', 'Contact Number', 'Aadhar Number',
         'Franchise ID', 'Franchise Name', 'Status', 'Created At', 'Updated At'
     ])
 
-    # Write data
     for student in students:
         writer.writerow([
             student.id,
@@ -709,6 +712,7 @@ def export_all_students_csv(
             student.previous_class,
             student.university.name if student.university else '',
             student.course.name if student.course else '',
+            student.course_variant.course_type if student.course_variant else '',
             student.branch_specialization or '',
             student.street_locality,
             student.city,
@@ -725,7 +729,6 @@ def export_all_students_csv(
 
     output.seek(0)
 
-    # Return CSV response
     return StreamingResponse(
         io.StringIO(output.getvalue()),
         media_type="text/csv",

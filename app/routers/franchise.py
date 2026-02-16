@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
 from datetime import datetime
 import csv
 import io
 from ..database import get_db
 from ..auth import get_current_franchise
-from ..models import User, Student, University, Course, Fee
+from ..models import User, Student, University, Course, CourseVariant, Fee
 from ..schemas import (
     StudentCreate, StudentResponse, StudentListResponse, StudentStats,
     UniversitySelectResponse, CourseSelectResponse
@@ -34,13 +34,15 @@ def get_courses_for_select(
     current_franchise: User = Depends(get_current_franchise)
 ):
     """Get active courses for dropdown selection by university"""
-    DEGREE_MAP = {"UG": "Undergraduate", "PG": "Postgraduate", "Diploma": "Diploma"}
-    query = db.query(Course).filter(
+    DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
+    query = db.query(Course).options(
+        selectinload(Course.variants)
+    ).filter(
         Course.university_id == university_id,
         Course.is_active == True
     )
     if degree_type and degree_type in DEGREE_MAP:
-        query = query.filter(Course.degree_type == DEGREE_MAP[degree_type])
+        query = query.filter(Course.degree_type.in_(DEGREE_MAP[degree_type]))
     courses = query.all()
     return courses
 
@@ -63,8 +65,16 @@ def create_student(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found or doesn't belong to the selected university")
 
-    # Get fee for the course (if exists)
-    fee = db.query(Fee).filter(Fee.course_id == student_data.course_id).first()
+    # Verify course variant exists and belongs to the course
+    variant = db.query(CourseVariant).filter(
+        CourseVariant.id == student_data.course_variant_id,
+        CourseVariant.course_id == student_data.course_id
+    ).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Course variant not found or doesn't belong to the selected course")
+
+    # Get fee for the variant (if exists)
+    fee = db.query(Fee).filter(Fee.course_variant_id == student_data.course_variant_id).first()
 
     # Create student record
     student = Student(
@@ -79,6 +89,7 @@ def create_student(
         previous_class=student_data.previous_class,
         university_id=student_data.university_id,
         course_id=student_data.course_id,
+        course_variant_id=student_data.course_variant_id,
         fee_id=fee.id if fee else None,
         branch_specialization=student_data.branch_specialization,
         skills=student_data.skills,
@@ -109,7 +120,6 @@ def create_student(
     db.commit()
     db.refresh(student)
 
-    # Return response with franchise name and related data
     return StudentResponse(
         id=student.id,
         first_name=student.first_name,
@@ -125,6 +135,8 @@ def create_student(
         university_name=university.name,
         course_id=student.course_id,
         course_name=course.name,
+        course_variant_id=student.course_variant_id,
+        course_type=variant.course_type,
         fee_id=student.fee_id,
         branch_specialization=student.branch_specialization,
         skills=student.skills,
@@ -166,11 +178,10 @@ def get_my_students(
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
-    from sqlalchemy.orm import selectinload
-
     query = db.query(Student).options(
         selectinload(Student.university),
         selectinload(Student.course),
+        selectinload(Student.course_variant),
         selectinload(Student.fee)
     ).filter(Student.franchise_id == current_franchise.id)
 
@@ -181,7 +192,6 @@ def get_my_students(
 
     students = query.all()
 
-    # Convert to response format
     student_responses = []
     for student in students:
         student_responses.append(StudentResponse(
@@ -199,6 +209,8 @@ def get_my_students(
             university_name=student.university.name if student.university else None,
             course_id=student.course_id,
             course_name=student.course.name if student.course else None,
+            course_variant_id=student.course_variant_id,
+            course_type=student.course_variant.course_type if student.course_variant else None,
             fee_id=student.fee_id,
             branch_specialization=student.branch_specialization,
             skills=student.skills,
@@ -242,31 +254,12 @@ def get_my_statistics(
 ):
     from ..models import AdmissionStatus
 
-    # Get total students for this franchise
     total = db.query(func.count(Student.id)).filter(Student.franchise_id == current_franchise.id).scalar()
+    pending = db.query(func.count(Student.id)).filter(Student.franchise_id == current_franchise.id, Student.status == AdmissionStatus.PENDING).scalar()
+    approved = db.query(func.count(Student.id)).filter(Student.franchise_id == current_franchise.id, Student.status == AdmissionStatus.APPROVED).scalar()
+    failed = db.query(func.count(Student.id)).filter(Student.franchise_id == current_franchise.id, Student.status == AdmissionStatus.FAILED).scalar()
 
-    # Get counts by status
-    pending = db.query(func.count(Student.id)).filter(
-        Student.franchise_id == current_franchise.id,
-        Student.status == AdmissionStatus.PENDING
-    ).scalar()
-
-    approved = db.query(func.count(Student.id)).filter(
-        Student.franchise_id == current_franchise.id,
-        Student.status == AdmissionStatus.APPROVED
-    ).scalar()
-
-    failed = db.query(func.count(Student.id)).filter(
-        Student.franchise_id == current_franchise.id,
-        Student.status == AdmissionStatus.FAILED
-    ).scalar()
-
-    return StudentStats(
-        total=total,
-        pending=pending,
-        approved=approved,
-        failed=failed
-    )
+    return StudentStats(total=total, pending=pending, approved=approved, failed=failed)
 
 @router.get("/students/csv")
 def export_students_csv(
@@ -275,11 +268,10 @@ def export_students_csv(
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
-    from sqlalchemy.orm import selectinload
-
     query = db.query(Student).options(
         selectinload(Student.university),
-        selectinload(Student.course)
+        selectinload(Student.course),
+        selectinload(Student.course_variant)
     ).filter(Student.franchise_id == current_franchise.id)
 
     if start_date:
@@ -289,20 +281,17 @@ def export_students_csv(
 
     students = query.all()
 
-    # Create CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
 
-    # Write header
     writer.writerow([
         'ID', 'First Name', 'Middle Name', 'Last Name', 'DOB', 'Email',
         'Father Name', 'Mother Name', 'Previous Class',
-        'University', 'Course', 'Branch/Specialization',
+        'University', 'Course', 'Course Type', 'Branch/Specialization',
         'Street/Locality', 'City', 'State', 'Pincode', 'Contact Number', 'Aadhar Number',
         'Franchise', 'Status', 'Created At', 'Updated At'
     ])
 
-    # Write data
     for student in students:
         writer.writerow([
             student.id,
@@ -316,6 +305,7 @@ def export_students_csv(
             student.previous_class,
             student.university.name if student.university else '',
             student.course.name if student.course else '',
+            student.course_variant.course_type if student.course_variant else '',
             student.branch_specialization or '',
             student.street_locality,
             student.city,
@@ -331,7 +321,6 @@ def export_students_csv(
 
     output.seek(0)
 
-    # Return CSV response
     return StreamingResponse(
         io.StringIO(output.getvalue()),
         media_type="text/csv",

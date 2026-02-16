@@ -58,10 +58,11 @@ class StudentCreate(BaseModel):
     mother_name: str = Field(..., min_length=1)
 
     # Academic Details
-    degree_type: str = Field(..., min_length=1)  # UG, PG, Diploma
+    degree_type: str = Field(..., min_length=1)
     previous_class: Optional[str] = None
     university_id: int
     course_id: int
+    course_variant_id: int
     branch_specialization: Optional[str] = None
     skills: Optional[str] = None
 
@@ -72,23 +73,28 @@ class StudentCreate(BaseModel):
     tenth_passing_year: Optional[str] = None
     tenth_percentage: Optional[str] = None
 
-    # 12th Details (for UG and PG)
+    # 12th Details
     twelfth_board: Optional[str] = None
     twelfth_board_other: Optional[str] = None
     twelfth_school: Optional[str] = None
     twelfth_passing_year: Optional[str] = None
     twelfth_percentage: Optional[str] = None
 
-    # Graduation Details (for PG)
+    # Graduation Details
     grad_university: Optional[str] = None
     grad_degree: Optional[str] = None
     grad_passing_year: Optional[str] = None
     grad_percentage: Optional[str] = None
     grad_subject: Optional[str] = None
 
+    # IDs
+    apaar_id: Optional[str] = None
+    session: Optional[str] = None
+
     # Contact & Address
     street_locality: str = Field(..., min_length=1)
     city: str = Field(..., min_length=1)
+    district: Optional[str] = None
     state: str = Field(..., min_length=1)
     pincode: str = Field(..., min_length=1)
     contact_number: str = Field(..., min_length=1)
@@ -111,6 +117,8 @@ class StudentResponse(BaseModel):
     university_name: Optional[str]
     course_id: Optional[int]
     course_name: Optional[str]
+    course_variant_id: Optional[int] = None
+    course_type: Optional[str] = None
     fee_id: Optional[int]
     branch_specialization: Optional[str]
     skills: Optional[str] = None
@@ -141,9 +149,14 @@ class StudentResponse(BaseModel):
     commission_percentage: Optional[Decimal] = None
     commission_amount: Optional[Decimal] = None
 
+    # IDs
+    apaar_id: Optional[str] = None
+    session: Optional[str] = None
+
     # Contact & Address
     street_locality: str
     city: str
+    district: Optional[str] = None
     state: str
     pincode: str
     contact_number: str
@@ -233,6 +246,29 @@ class UniversitySelectResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ===== COURSE VARIANT SCHEMAS =====
+class CourseVariantCreate(BaseModel):
+    course_type: str = Field(..., min_length=1, max_length=50)
+    is_active: bool = True
+
+class CourseVariantResponse(BaseModel):
+    id: int
+    course_id: int
+    course_type: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CourseVariantSelectResponse(BaseModel):
+    id: int
+    course_type: str
+
+    class Config:
+        from_attributes = True
+
 # ===== COURSE SCHEMAS =====
 class CourseCreate(BaseModel):
     university_id: int
@@ -240,6 +276,8 @@ class CourseCreate(BaseModel):
     code: Optional[str] = Field(None, max_length=50)
     duration_years: Optional[int] = Field(None, ge=1, le=10)
     degree_type: Optional[str] = Field(None, max_length=50)
+    eligible_education: Optional[List[str]] = None  # e.g., ["Class 10", "Class 12"]
+    course_types: Optional[List[str]] = None  # List of types to auto-create variants
     description: Optional[str] = None
     is_active: bool = True
 
@@ -248,6 +286,8 @@ class CourseUpdate(BaseModel):
     code: Optional[str] = Field(None, max_length=50)
     duration_years: Optional[int] = Field(None, ge=1, le=10)
     degree_type: Optional[str] = Field(None, max_length=50)
+    eligible_education: Optional[List[str]] = None  # e.g., ["Class 10", "Class 12"]
+    course_types: Optional[List[str]] = None  # Update variants
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -258,8 +298,10 @@ class CourseResponse(BaseModel):
     code: Optional[str]
     duration_years: Optional[int]
     degree_type: Optional[str]
+    eligible_education: Optional[str]
     description: Optional[str]
     is_active: bool
+    variants: List[CourseVariantResponse] = []
     created_at: datetime
     updated_at: datetime
 
@@ -271,13 +313,15 @@ class CourseSelectResponse(BaseModel):
     name: str
     code: Optional[str]
     duration_years: Optional[int]
+    eligible_education: Optional[str]
+    variants: List[CourseVariantSelectResponse] = []
 
     class Config:
         from_attributes = True
 
 # ===== FEE SCHEMAS =====
 class FeeCreate(BaseModel):
-    course_id: int
+    course_variant_id: int
     tuition_fee: Decimal = Field(..., ge=0, decimal_places=2)
     registration_fee: Decimal = Field(..., ge=0, decimal_places=2)
     exam_fee_yearly: Decimal = Field(..., ge=0, decimal_places=2)
@@ -297,6 +341,14 @@ class FeeUpdate(BaseModel):
     effective_from: Optional[date] = None
     is_active: Optional[bool] = None
 
+class CourseVariantInFeeResponse(BaseModel):
+    id: int
+    course_type: str
+    course: Optional["CourseInFeeResponse"] = None
+
+    class Config:
+        from_attributes = True
+
 class CourseInFeeResponse(BaseModel):
     id: int
     name: str
@@ -308,8 +360,8 @@ class CourseInFeeResponse(BaseModel):
 
 class FeeResponse(BaseModel):
     id: int
-    course_id: int
-    course: Optional[CourseInFeeResponse] = None
+    course_variant_id: int
+    course_variant: Optional[CourseVariantInFeeResponse] = None
     tuition_fee: Decimal
     registration_fee: Decimal
     exam_fee_yearly: Decimal
@@ -333,5 +385,4 @@ class FeeResponse(BaseModel):
         from_attributes = True
 
 class CourseWithFeeResponse(CourseResponse):
-    fee: Optional[FeeResponse] = None
     university: UniversityResponse
