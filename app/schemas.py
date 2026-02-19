@@ -62,6 +62,7 @@ class StudentCreate(BaseModel):
     previous_class: Optional[str] = None
     university_id: int
     course_id: int
+    branch_id: Optional[int] = None
     course_variant_id: int
     branch_specialization: Optional[str] = None
     skills: Optional[str] = None
@@ -117,6 +118,8 @@ class StudentResponse(BaseModel):
     university_name: Optional[str]
     course_id: Optional[int]
     course_name: Optional[str]
+    branch_id: Optional[int] = None
+    branch_name: Optional[str] = None
     course_variant_id: Optional[int] = None
     course_type: Optional[str] = None
     fee_id: Optional[int]
@@ -254,6 +257,7 @@ class CourseVariantCreate(BaseModel):
 class CourseVariantResponse(BaseModel):
     id: int
     course_id: int
+    branch_id: Optional[int] = None
     course_type: str
     is_active: bool
     created_at: datetime
@@ -265,6 +269,37 @@ class CourseVariantResponse(BaseModel):
 class CourseVariantSelectResponse(BaseModel):
     id: int
     course_type: str
+    branch_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+# ===== BRANCH SCHEMAS =====
+class BranchCreate(BaseModel):
+    course_id: int
+    name: str = Field(..., min_length=1, max_length=255)
+    is_active: bool = True
+
+class BranchUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    is_active: Optional[bool] = None
+
+class BranchResponse(BaseModel):
+    id: int
+    course_id: int
+    name: str
+    is_active: bool
+    variants: List[CourseVariantResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class BranchSelectResponse(BaseModel):
+    id: int
+    name: str
+    variants: List[CourseVariantSelectResponse] = []
 
     class Config:
         from_attributes = True
@@ -302,6 +337,7 @@ class CourseResponse(BaseModel):
     description: Optional[str]
     is_active: bool
     variants: List[CourseVariantResponse] = []
+    branches: List[BranchResponse] = []
     created_at: datetime
     updated_at: datetime
 
@@ -315,6 +351,7 @@ class CourseSelectResponse(BaseModel):
     duration_years: Optional[int]
     eligible_education: Optional[str]
     variants: List[CourseVariantSelectResponse] = []
+    branches: List[BranchSelectResponse] = []
 
     class Config:
         from_attributes = True

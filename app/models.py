@@ -66,11 +66,33 @@ class Course(Base):
 
     # Relationships
     university = relationship("University", back_populates="courses")
-    variants = relationship("CourseVariant", back_populates="course", cascade="all, delete-orphan")
+    branches = relationship("Branch", back_populates="course", cascade="all, delete-orphan")
+    # cascade="all" (not delete-orphan) because branch-level variants also have course_id set;
+    # delete-orphan would conflict when a variant belongs to both Course and Branch collections
+    variants = relationship("CourseVariant", back_populates="course", cascade="all", overlaps="branch,variants")
     students = relationship("Student", back_populates="course")
 
     __table_args__ = (
         UniqueConstraint('university_id', 'code', name='uq_course_university_code'),
+    )
+
+class Branch(Base):
+    __tablename__ = "branch"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("course.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    course = relationship("Course", back_populates="branches")
+    variants = relationship("CourseVariant", back_populates="branch", cascade="all, delete-orphan", overlaps="course,variants")
+    students = relationship("Student", back_populates="branch")
+
+    __table_args__ = (
+        UniqueConstraint('course_id', 'name', name='uq_branch_course_name'),
     )
 
 class CourseVariant(Base):
@@ -78,19 +100,17 @@ class CourseVariant(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("course.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id = Column(Integer, ForeignKey("branch.id", ondelete="CASCADE"), nullable=True, index=True)
     course_type = Column(String(50), nullable=False)  # Regular, Private, Online, Distance
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    course = relationship("Course", back_populates="variants")
+    course = relationship("Course", back_populates="variants", overlaps="branch,variants")
+    branch = relationship("Branch", back_populates="variants", overlaps="course,variants")
     fee = relationship("Fee", back_populates="course_variant", uselist=False, cascade="all, delete-orphan")
     students = relationship("Student", back_populates="course_variant")
-
-    __table_args__ = (
-        UniqueConstraint('course_id', 'course_type', name='uq_course_variant_type'),
-    )
 
 class Fee(Base):
     __tablename__ = "fee"
@@ -181,15 +201,17 @@ class Student(Base):
     franchise_id = Column(Integer, ForeignKey("user.id"), nullable=False)
     franchise = relationship("User", back_populates="students")
 
-    # FK columns for University, Course, CourseVariant, Fee
+    # FK columns for University, Course, Branch, CourseVariant, Fee
     university_id = Column(Integer, ForeignKey("university.id", ondelete="SET NULL"), nullable=True, index=True)
     course_id = Column(Integer, ForeignKey("course.id", ondelete="SET NULL"), nullable=True, index=True)
+    branch_id = Column(Integer, ForeignKey("branch.id", ondelete="SET NULL"), nullable=True, index=True)
     course_variant_id = Column(Integer, ForeignKey("course_variant.id", ondelete="SET NULL"), nullable=True, index=True)
     fee_id = Column(Integer, ForeignKey("fee.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Relationships
     university = relationship("University", back_populates="students")
     course = relationship("Course", back_populates="students")
+    branch = relationship("Branch", back_populates="students")
     course_variant = relationship("CourseVariant", back_populates="students")
     fee = relationship("Fee", back_populates="students")
 

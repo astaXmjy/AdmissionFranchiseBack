@@ -8,14 +8,15 @@ import csv
 import io
 from ..database import get_db
 from ..auth import get_current_admin, get_password_hash
-from ..models import User, Student, University, Course, CourseVariant, Fee
+from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
 from ..schemas import (
     UserCreate, UserUpdate, UserResponse, StudentListResponse, StudentResponse,
     StudentFilter, StatusUpdate, CommissionUpdate, StudentStats, FranchiseStats,
     UniversityCreate, UniversityUpdate, UniversityResponse, UniversitySelectResponse,
     CourseCreate, CourseUpdate, CourseResponse, CourseSelectResponse, CourseWithFeeResponse,
     FeeCreate, FeeUpdate, FeeResponse,
-    CourseVariantResponse
+    CourseVariantResponse,
+    BranchCreate, BranchUpdate, BranchResponse
 )
 
 router = APIRouter()
@@ -245,7 +246,8 @@ def get_courses(
 ):
     query = db.query(Course).options(
         selectinload(Course.university),
-        selectinload(Course.variants).selectinload(CourseVariant.fee)
+        selectinload(Course.variants).selectinload(CourseVariant.fee),
+        selectinload(Course.branches).selectinload(Branch.variants).selectinload(CourseVariant.fee)
     )
 
     if university_id:
@@ -266,7 +268,8 @@ def get_courses_for_select(
     """Get active courses for dropdown selection by university"""
     DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
     query = db.query(Course).options(
-        selectinload(Course.variants)
+        selectinload(Course.variants),
+        selectinload(Course.branches).selectinload(Branch.variants)
     ).filter(
         Course.university_id == university_id,
         Course.is_active == True
@@ -284,7 +287,8 @@ def get_course(
 ):
     course = db.query(Course).options(
         selectinload(Course.university),
-        selectinload(Course.variants).selectinload(CourseVariant.fee)
+        selectinload(Course.variants).selectinload(CourseVariant.fee),
+        selectinload(Course.branches).selectinload(Branch.variants).selectinload(CourseVariant.fee)
     ).filter(Course.id == course_id).first()
 
     if not course:
@@ -315,18 +319,19 @@ def update_course(
     for field, value in update_dict.items():
         setattr(course, field, value)
 
-    # Update variants if course_types provided
+    # Update course-level variants if course_types provided (branch variants are managed separately)
     if course_types is not None:
-        existing_types = {v.course_type for v in course.variants}
+        course_level_variants = [v for v in course.variants if v.branch_id is None]
+        existing_types = {v.course_type for v in course_level_variants}
         new_types = set(course_types)
 
-        # Add new variants
+        # Add new course-level variants
         for ct in new_types - existing_types:
             variant = CourseVariant(course_id=course.id, course_type=ct)
             db.add(variant)
 
-        # Deactivate removed variants (don't delete — they may have fees/students)
-        for variant in course.variants:
+        # Deactivate removed course-level variants (don't delete — they may have fees/students)
+        for variant in course_level_variants:
             if variant.course_type not in new_types:
                 variant.is_active = False
             else:
@@ -366,12 +371,110 @@ def get_course_variants(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    """Get all variants for a course"""
+    """Get course-level variants (no branch) for a course"""
     variants = db.query(CourseVariant).filter(
         CourseVariant.course_id == course_id,
+        CourseVariant.branch_id == None,
         CourseVariant.is_active == True
     ).all()
     return variants
+
+# ===== BRANCH MANAGEMENT =====
+
+@router.post("/branches", response_model=BranchResponse)
+def create_branch(
+    branch_data: BranchCreate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    course = db.query(Course).filter(Course.id == branch_data.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    existing = db.query(Branch).filter(
+        Branch.course_id == branch_data.course_id,
+        Branch.name == branch_data.name
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Branch with this name already exists for this course")
+
+    branch = Branch(
+        course_id=branch_data.course_id,
+        name=branch_data.name,
+        is_active=branch_data.is_active
+    )
+    db.add(branch)
+    db.commit()
+    db.refresh(branch)
+    return branch
+
+@router.get("/branches", response_model=List[BranchResponse])
+def get_branches(
+    course_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    query = db.query(Branch).options(selectinload(Branch.variants))
+    if course_id:
+        query = query.filter(Branch.course_id == course_id)
+    return query.all()
+
+@router.get("/branches/{branch_id}", response_model=BranchResponse)
+def get_branch(
+    branch_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    branch = db.query(Branch).options(
+        selectinload(Branch.variants)
+    ).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return branch
+
+@router.patch("/branches/{branch_id}", response_model=BranchResponse)
+def update_branch(
+    branch_id: int,
+    branch_data: BranchUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    branch = db.query(Branch).options(
+        selectinload(Branch.variants)
+    ).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    update_dict = branch_data.dict(exclude_unset=True)
+
+    for field, value in update_dict.items():
+        setattr(branch, field, value)
+
+    branch.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(branch)
+    return branch
+
+@router.delete("/branches/{branch_id}")
+def delete_branch(
+    branch_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    branch = db.query(Branch).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    students_count = db.query(func.count(Student.id)).filter(Student.branch_id == branch_id).scalar()
+    if students_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete branch with {students_count} enrolled students. Deactivate the branch instead."
+        )
+
+    db.delete(branch)
+    db.commit()
+    return {"message": "Branch deleted successfully"}
 
 # ===== FEE MANAGEMENT =====
 
@@ -488,6 +591,8 @@ def build_student_response(student):
         university_name=student.university.name if student.university else None,
         course_id=student.course_id,
         course_name=student.course.name if student.course else None,
+        branch_id=student.branch_id,
+        branch_name=student.branch.name if student.branch else None,
         course_variant_id=student.course_variant_id,
         course_type=student.course_variant.course_type if student.course_variant else None,
         fee_id=student.fee_id,
@@ -536,6 +641,7 @@ def get_all_students(
         selectinload(Student.franchise),
         selectinload(Student.university),
         selectinload(Student.course),
+        selectinload(Student.branch),
         selectinload(Student.course_variant),
         selectinload(Student.fee)
     )

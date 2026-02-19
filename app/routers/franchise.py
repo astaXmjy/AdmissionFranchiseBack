@@ -7,10 +7,10 @@ import csv
 import io
 from ..database import get_db
 from ..auth import get_current_franchise
-from ..models import User, Student, University, Course, CourseVariant, Fee
+from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
 from ..schemas import (
     StudentCreate, StudentResponse, StudentListResponse, StudentStats,
-    UniversitySelectResponse, CourseSelectResponse
+    UniversitySelectResponse, CourseSelectResponse, BranchSelectResponse
 )
 from sqlalchemy import func
 
@@ -36,7 +36,8 @@ def get_courses_for_select(
     """Get active courses for dropdown selection by university"""
     DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
     query = db.query(Course).options(
-        selectinload(Course.variants)
+        selectinload(Course.variants),
+        selectinload(Course.branches).selectinload(Branch.variants)
     ).filter(
         Course.university_id == university_id,
         Course.is_active == True
@@ -45,6 +46,21 @@ def get_courses_for_select(
         query = query.filter(Course.degree_type.in_(DEGREE_MAP[degree_type]))
     courses = query.all()
     return courses
+
+@router.get("/branches/select", response_model=List[BranchSelectResponse])
+def get_branches_for_select(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    """Get active branches for a course (for dropdown selection)"""
+    branches = db.query(Branch).options(
+        selectinload(Branch.variants)
+    ).filter(
+        Branch.course_id == course_id,
+        Branch.is_active == True
+    ).all()
+    return branches
 
 @router.post("/students", response_model=StudentResponse)
 def create_student(
@@ -65,7 +81,7 @@ def create_student(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found or doesn't belong to the selected university")
 
-    # Verify course variant exists and belongs to the course
+    # Verify course variant exists and belongs to the course (or course's branch)
     variant = db.query(CourseVariant).filter(
         CourseVariant.id == student_data.course_variant_id,
         CourseVariant.course_id == student_data.course_id
@@ -89,6 +105,7 @@ def create_student(
         previous_class=student_data.previous_class,
         university_id=student_data.university_id,
         course_id=student_data.course_id,
+        branch_id=student_data.branch_id,
         course_variant_id=student_data.course_variant_id,
         fee_id=fee.id if fee else None,
         branch_specialization=student_data.branch_specialization,
@@ -120,6 +137,8 @@ def create_student(
     db.commit()
     db.refresh(student)
 
+    branch = db.query(Branch).filter(Branch.id == student_data.branch_id).first() if student_data.branch_id else None
+
     return StudentResponse(
         id=student.id,
         first_name=student.first_name,
@@ -135,6 +154,8 @@ def create_student(
         university_name=university.name,
         course_id=student.course_id,
         course_name=course.name,
+        branch_id=student.branch_id,
+        branch_name=branch.name if branch else None,
         course_variant_id=student.course_variant_id,
         course_type=variant.course_type,
         fee_id=student.fee_id,
@@ -181,6 +202,7 @@ def get_my_students(
     query = db.query(Student).options(
         selectinload(Student.university),
         selectinload(Student.course),
+        selectinload(Student.branch),
         selectinload(Student.course_variant),
         selectinload(Student.fee)
     ).filter(Student.franchise_id == current_franchise.id)
@@ -209,6 +231,8 @@ def get_my_students(
             university_name=student.university.name if student.university else None,
             course_id=student.course_id,
             course_name=student.course.name if student.course else None,
+            branch_id=student.branch_id,
+            branch_name=student.branch.name if student.branch else None,
             course_variant_id=student.course_variant_id,
             course_type=student.course_variant.course_type if student.course_variant else None,
             fee_id=student.fee_id,
