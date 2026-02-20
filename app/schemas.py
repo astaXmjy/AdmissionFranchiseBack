@@ -101,6 +101,9 @@ class StudentCreate(BaseModel):
     contact_number: str = Field(..., min_length=1)
     aadhar_number: str = Field(..., min_length=12, max_length=12)
 
+class StudentCreateAdmin(StudentCreate):
+    franchise_id: int
+
 class StudentResponse(BaseModel):
     id: int
     first_name: str

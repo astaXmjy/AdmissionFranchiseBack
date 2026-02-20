@@ -16,7 +16,8 @@ from ..schemas import (
     CourseCreate, CourseUpdate, CourseResponse, CourseSelectResponse, CourseWithFeeResponse,
     FeeCreate, FeeUpdate, FeeResponse,
     CourseVariantResponse,
-    BranchCreate, BranchUpdate, BranchResponse
+    BranchCreate, BranchUpdate, BranchResponse,
+    StudentCreateAdmin
 )
 
 router = APIRouter()
@@ -93,13 +94,7 @@ def delete_franchise(
     if not franchise:
         raise HTTPException(status_code=404, detail="Franchise not found")
 
-    students_count = db.query(func.count(Student.id)).filter(Student.franchise_id == franchise_id).scalar()
-    if students_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot delete franchise with {students_count} associated students. Deactivate the franchise instead."
-        )
-
+    db.query(Student).filter(Student.franchise_id == franchise_id).delete()
     db.delete(franchise)
     db.commit()
     return {"message": "Franchise deleted successfully"}
@@ -613,17 +608,155 @@ def build_student_response(student):
         grad_passing_year=student.grad_passing_year,
         grad_percentage=student.grad_percentage,
         grad_subject=student.grad_subject,
+        apaar_id=student.apaar_id,
+        session=student.session,
         total_fee=student.fee.total_first_year if student.fee else None,
         commission_percentage=student.commission_percentage,
         commission_amount=student.commission_amount,
         street_locality=student.street_locality,
         city=student.city,
+        district=student.district,
         state=student.state,
         pincode=student.pincode,
         contact_number=student.contact_number,
         aadhar_number=student.aadhar_number,
         franchise_id=student.franchise_id,
         franchise_name=student.franchise.full_name,
+        status=student.status.value,
+        created_at=student.created_at,
+        updated_at=student.updated_at
+    )
+
+@router.post("/students", response_model=StudentResponse)
+def create_student_as_admin(
+    student_data: StudentCreateAdmin,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    franchise = db.query(User).filter(User.id == student_data.franchise_id, User.role == "franchise").first()
+    if not franchise:
+        raise HTTPException(status_code=404, detail="Franchise not found")
+
+    university = db.query(University).filter(University.id == student_data.university_id).first()
+    if not university:
+        raise HTTPException(status_code=404, detail="University not found")
+
+    course = db.query(Course).filter(
+        Course.id == student_data.course_id,
+        Course.university_id == student_data.university_id
+    ).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found or doesn't belong to the selected university")
+
+    variant = db.query(CourseVariant).filter(
+        CourseVariant.id == student_data.course_variant_id,
+        CourseVariant.course_id == student_data.course_id
+    ).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Course variant not found or doesn't belong to the selected course")
+
+    fee = db.query(Fee).filter(Fee.course_variant_id == student_data.course_variant_id).first()
+
+    student = Student(
+        first_name=student_data.first_name,
+        middle_name=student_data.middle_name,
+        last_name=student_data.last_name,
+        dob=student_data.dob,
+        email=student_data.email,
+        father_name=student_data.father_name,
+        mother_name=student_data.mother_name,
+        degree_type=student_data.degree_type,
+        previous_class=student_data.previous_class,
+        university_id=student_data.university_id,
+        course_id=student_data.course_id,
+        branch_id=student_data.branch_id,
+        course_variant_id=student_data.course_variant_id,
+        fee_id=fee.id if fee else None,
+        branch_specialization=student_data.branch_specialization,
+        skills=student_data.skills,
+        tenth_board=student_data.tenth_board,
+        tenth_board_other=student_data.tenth_board_other,
+        tenth_school=student_data.tenth_school,
+        tenth_passing_year=student_data.tenth_passing_year,
+        tenth_percentage=student_data.tenth_percentage,
+        twelfth_board=student_data.twelfth_board,
+        twelfth_board_other=student_data.twelfth_board_other,
+        twelfth_school=student_data.twelfth_school,
+        twelfth_passing_year=student_data.twelfth_passing_year,
+        twelfth_percentage=student_data.twelfth_percentage,
+        grad_university=student_data.grad_university,
+        grad_degree=student_data.grad_degree,
+        grad_passing_year=student_data.grad_passing_year,
+        grad_percentage=student_data.grad_percentage,
+        grad_subject=student_data.grad_subject,
+        apaar_id=student_data.apaar_id,
+        session=student_data.session,
+        street_locality=student_data.street_locality,
+        city=student_data.city,
+        district=student_data.district,
+        state=student_data.state,
+        pincode=student_data.pincode,
+        contact_number=student_data.contact_number,
+        aadhar_number=student_data.aadhar_number,
+        franchise_id=student_data.franchise_id
+    )
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+    branch = db.query(Branch).filter(Branch.id == student_data.branch_id).first() if student_data.branch_id else None
+
+    return StudentResponse(
+        id=student.id,
+        first_name=student.first_name,
+        middle_name=student.middle_name,
+        last_name=student.last_name,
+        dob=student.dob,
+        email=student.email,
+        father_name=student.father_name,
+        mother_name=student.mother_name,
+        degree_type=student.degree_type,
+        previous_class=student.previous_class,
+        university_id=student.university_id,
+        university_name=university.name,
+        course_id=student.course_id,
+        course_name=course.name,
+        branch_id=student.branch_id,
+        branch_name=branch.name if branch else None,
+        course_variant_id=student.course_variant_id,
+        course_type=variant.course_type,
+        fee_id=student.fee_id,
+        branch_specialization=student.branch_specialization,
+        skills=student.skills,
+        tenth_board=student.tenth_board,
+        tenth_board_other=student.tenth_board_other,
+        tenth_school=student.tenth_school,
+        tenth_passing_year=student.tenth_passing_year,
+        tenth_percentage=student.tenth_percentage,
+        twelfth_board=student.twelfth_board,
+        twelfth_board_other=student.twelfth_board_other,
+        twelfth_school=student.twelfth_school,
+        twelfth_passing_year=student.twelfth_passing_year,
+        twelfth_percentage=student.twelfth_percentage,
+        grad_university=student.grad_university,
+        grad_degree=student.grad_degree,
+        grad_passing_year=student.grad_passing_year,
+        grad_percentage=student.grad_percentage,
+        grad_subject=student.grad_subject,
+        apaar_id=student.apaar_id,
+        session=student.session,
+        total_fee=fee.total_first_year if fee else None,
+        commission_percentage=student.commission_percentage,
+        commission_amount=student.commission_amount,
+        street_locality=student.street_locality,
+        city=student.city,
+        district=student.district,
+        state=student.state,
+        pincode=student.pincode,
+        contact_number=student.contact_number,
+        aadhar_number=student.aadhar_number,
+        franchise_id=student.franchise_id,
+        franchise_name=franchise.full_name,
         status=student.status.value,
         created_at=student.created_at,
         updated_at=student.updated_at
