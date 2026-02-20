@@ -182,13 +182,6 @@ def delete_university(
     if not university:
         raise HTTPException(status_code=404, detail="University not found")
 
-    courses_count = db.query(func.count(Course.id)).filter(Course.university_id == university_id).scalar()
-    if courses_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot delete university with {courses_count} associated courses. Delete courses first or deactivate the university."
-        )
-
     db.delete(university)
     db.commit()
     return {"message": "University deleted successfully"}
