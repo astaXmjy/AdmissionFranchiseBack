@@ -17,7 +17,7 @@ from ..schemas import (
     FeeCreate, FeeUpdate, FeeResponse,
     CourseVariantResponse,
     BranchCreate, BranchUpdate, BranchResponse,
-    StudentCreateAdmin
+    StudentCreateAdmin, StudentUpdate
 )
 
 router = APIRouter()
@@ -755,14 +755,51 @@ def create_student_as_admin(
         updated_at=student.updated_at
     )
 
+@router.patch("/students/{student_id}", response_model=StudentResponse)
+def update_student(
+    student_id: int,
+    student_data: StudentUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    student = db.query(Student).options(
+        selectinload(Student.franchise),
+        selectinload(Student.university),
+        selectinload(Student.course),
+        selectinload(Student.branch),
+        selectinload(Student.course_variant),
+        selectinload(Student.fee)
+    ).filter(Student.id == student_id).first()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    update_data = student_data.dict(exclude_unset=True)
+
+    # If course_variant_id is changing, update fee_id too
+    if 'course_variant_id' in update_data:
+        fee = db.query(Fee).filter(Fee.course_variant_id == update_data['course_variant_id']).first()
+        student.fee_id = fee.id if fee else None
+
+    for field, value in update_data.items():
+        setattr(student, field, value)
+
+    student.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(student)
+
+    return build_student_response(student)
+
 @router.get("/students", response_model=StudentListResponse)
 def get_all_students(
     franchise_id: Optional[int] = None,
+    status: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
+    from ..models import AdmissionStatus
     query = db.query(Student).options(
         selectinload(Student.franchise),
         selectinload(Student.university),
@@ -774,6 +811,11 @@ def get_all_students(
 
     if franchise_id:
         query = query.filter(Student.franchise_id == franchise_id)
+    if status:
+        try:
+            query = query.filter(Student.status == AdmissionStatus[status])
+        except KeyError:
+            pass
     if start_date:
         query = query.filter(Student.created_at >= start_date)
     if end_date:

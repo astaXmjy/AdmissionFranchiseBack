@@ -9,7 +9,7 @@ from ..database import get_db
 from ..auth import get_current_franchise
 from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
 from ..schemas import (
-    StudentCreate, StudentResponse, StudentListResponse, StudentStats,
+    StudentCreate, StudentUpdate, StudentResponse, StudentListResponse, StudentStats,
     UniversitySelectResponse, CourseSelectResponse, BranchSelectResponse
 )
 from sqlalchemy import func
@@ -198,13 +198,111 @@ def create_student(
         updated_at=student.updated_at
     )
 
+@router.patch("/students/{student_id}", response_model=StudentResponse)
+def update_student(
+    student_id: int,
+    student_data: StudentUpdate,
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    from ..models import AdmissionStatus
+    student = db.query(Student).options(
+        selectinload(Student.university),
+        selectinload(Student.course),
+        selectinload(Student.branch),
+        selectinload(Student.course_variant),
+        selectinload(Student.fee)
+    ).filter(
+        Student.id == student_id,
+        Student.franchise_id == current_franchise.id
+    ).first()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if student.status != AdmissionStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only PENDING students can be edited")
+
+    update_data = student_data.dict(exclude_unset=True)
+    update_data.pop('franchise_id', None)  # franchise cannot change ownership
+
+    # If course_variant_id is changing, update fee_id too
+    if 'course_variant_id' in update_data:
+        fee = db.query(Fee).filter(Fee.course_variant_id == update_data['course_variant_id']).first()
+        student.fee_id = fee.id if fee else None
+
+    for field, value in update_data.items():
+        setattr(student, field, value)
+
+    student.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(student)
+
+    return StudentResponse(
+        id=student.id,
+        first_name=student.first_name,
+        middle_name=student.middle_name,
+        last_name=student.last_name,
+        dob=student.dob,
+        email=student.email,
+        father_name=student.father_name,
+        mother_name=student.mother_name,
+        degree_type=student.degree_type,
+        previous_class=student.previous_class,
+        university_id=student.university_id,
+        university_name=student.university.name if student.university else None,
+        course_id=student.course_id,
+        course_name=student.course.name if student.course else None,
+        branch_id=student.branch_id,
+        branch_name=student.branch.name if student.branch else None,
+        course_variant_id=student.course_variant_id,
+        course_type=student.course_variant.course_type if student.course_variant else None,
+        fee_id=student.fee_id,
+        branch_specialization=student.branch_specialization,
+        skills=student.skills,
+        tenth_board=student.tenth_board,
+        tenth_board_other=student.tenth_board_other,
+        tenth_school=student.tenth_school,
+        tenth_passing_year=student.tenth_passing_year,
+        tenth_percentage=student.tenth_percentage,
+        twelfth_board=student.twelfth_board,
+        twelfth_board_other=student.twelfth_board_other,
+        twelfth_school=student.twelfth_school,
+        twelfth_passing_year=student.twelfth_passing_year,
+        twelfth_percentage=student.twelfth_percentage,
+        grad_university=student.grad_university,
+        grad_degree=student.grad_degree,
+        grad_passing_year=student.grad_passing_year,
+        grad_percentage=student.grad_percentage,
+        grad_subject=student.grad_subject,
+        apaar_id=student.apaar_id,
+        session=student.session,
+        total_fee=student.fee.total_first_year if student.fee else None,
+        commission_percentage=student.commission_percentage,
+        commission_amount=student.commission_amount,
+        street_locality=student.street_locality,
+        city=student.city,
+        district=student.district,
+        state=student.state,
+        pincode=student.pincode,
+        contact_number=student.contact_number,
+        aadhar_number=student.aadhar_number,
+        franchise_id=student.franchise_id,
+        franchise_name=current_franchise.full_name,
+        status=student.status.value,
+        created_at=student.created_at,
+        updated_at=student.updated_at
+    )
+
 @router.get("/students", response_model=StudentListResponse)
 def get_my_students(
+    status: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
+    from ..models import AdmissionStatus
     query = db.query(Student).options(
         selectinload(Student.university),
         selectinload(Student.course),
@@ -213,6 +311,11 @@ def get_my_students(
         selectinload(Student.fee)
     ).filter(Student.franchise_id == current_franchise.id)
 
+    if status:
+        try:
+            query = query.filter(Student.status == AdmissionStatus[status])
+        except KeyError:
+            pass
     if start_date:
         query = query.filter(Student.created_at >= start_date)
     if end_date:

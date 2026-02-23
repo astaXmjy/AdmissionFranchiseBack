@@ -104,6 +104,48 @@ class StudentCreate(BaseModel):
 class StudentCreateAdmin(StudentCreate):
     franchise_id: int
 
+class StudentUpdate(BaseModel):
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    dob: Optional[date] = None
+    email: Optional[str] = None
+    father_name: Optional[str] = None
+    mother_name: Optional[str] = None
+    degree_type: Optional[str] = None
+    previous_class: Optional[str] = None
+    university_id: Optional[int] = None
+    course_id: Optional[int] = None
+    branch_id: Optional[int] = None
+    course_variant_id: Optional[int] = None
+    branch_specialization: Optional[str] = None
+    skills: Optional[str] = None
+    tenth_board: Optional[str] = None
+    tenth_board_other: Optional[str] = None
+    tenth_school: Optional[str] = None
+    tenth_passing_year: Optional[str] = None
+    tenth_percentage: Optional[str] = None
+    twelfth_board: Optional[str] = None
+    twelfth_board_other: Optional[str] = None
+    twelfth_school: Optional[str] = None
+    twelfth_passing_year: Optional[str] = None
+    twelfth_percentage: Optional[str] = None
+    grad_university: Optional[str] = None
+    grad_degree: Optional[str] = None
+    grad_passing_year: Optional[str] = None
+    grad_percentage: Optional[str] = None
+    grad_subject: Optional[str] = None
+    apaar_id: Optional[str] = None
+    session: Optional[str] = None
+    street_locality: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
+    contact_number: Optional[str] = None
+    aadhar_number: Optional[str] = None
+    franchise_id: Optional[int] = None
+
 class StudentResponse(BaseModel):
     id: int
     first_name: str
