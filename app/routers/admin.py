@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
@@ -6,6 +7,10 @@ from typing import List, Optional
 from datetime import datetime
 import csv
 import io
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+ALLOWED_DOC_TYPES = {"image/jpeg", "image/png", "image/jpg", "application/pdf"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 from ..database import get_db
 from ..auth import get_current_admin, get_password_hash
 from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
@@ -307,7 +312,7 @@ def update_course(
     for field, value in update_dict.items():
         setattr(course, field, value)
 
-    # Update course-level variants if course_types provided (branch variants are managed separately)
+    # Update course-level variants if course_types provided; also sync branch-level variants
     if course_types is not None:
         course_level_variants = [v for v in course.variants if v.branch_id is None]
         existing_types = {v.course_type for v in course_level_variants}
@@ -315,15 +320,26 @@ def update_course(
 
         # Add new course-level variants
         for ct in new_types - existing_types:
-            variant = CourseVariant(course_id=course.id, course_type=ct)
-            db.add(variant)
+            db.add(CourseVariant(course_id=course.id, course_type=ct))
 
-        # Deactivate removed course-level variants (don't delete — they may have fees/students)
+        # Deactivate removed course-level variants
         for variant in course_level_variants:
-            if variant.course_type not in new_types:
-                variant.is_active = False
-            else:
-                variant.is_active = True
+            variant.is_active = variant.course_type in new_types
+
+        # Sync branch-level variants: add/deactivate to match course-level types
+        branches = db.query(Branch).filter(Branch.course_id == course.id).all()
+        for branch in branches:
+            branch_variants = db.query(CourseVariant).filter(
+                CourseVariant.course_id == course.id,
+                CourseVariant.branch_id == branch.id
+            ).all()
+            branch_existing_types = {v.course_type for v in branch_variants}
+
+            for ct in new_types - branch_existing_types:
+                db.add(CourseVariant(course_id=course.id, branch_id=branch.id, course_type=ct))
+
+            for variant in branch_variants:
+                variant.is_active = variant.course_type in new_types
 
     course.updated_at = datetime.utcnow()
     db.commit()
@@ -392,9 +408,25 @@ def create_branch(
         is_active=branch_data.is_active
     )
     db.add(branch)
+    db.flush()  # get branch.id before commit
+
+    # Auto-create a branch-level variant for each active course-level variant
+    course_level_variants = db.query(CourseVariant).filter(
+        CourseVariant.course_id == branch_data.course_id,
+        CourseVariant.branch_id == None,
+        CourseVariant.is_active == True
+    ).all()
+    for cv in course_level_variants:
+        db.add(CourseVariant(
+            course_id=branch_data.course_id,
+            branch_id=branch.id,
+            course_type=cv.course_type,
+            is_active=True
+        ))
+
     db.commit()
     db.refresh(branch)
-    return branch
+    return db.query(Branch).options(selectinload(Branch.variants)).filter(Branch.id == branch.id).first()
 
 @router.get("/branches", response_model=List[BranchResponse])
 def get_branches(
@@ -443,6 +475,40 @@ def update_branch(
     db.refresh(branch)
     return branch
 
+@router.post("/branches/{branch_id}/sync-variants", response_model=BranchResponse)
+def sync_branch_variants(
+    branch_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Create missing branch-level variants based on parent course's active course types."""
+    branch = db.query(Branch).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    course_level_variants = db.query(CourseVariant).filter(
+        CourseVariant.course_id == branch.course_id,
+        CourseVariant.branch_id == None,
+        CourseVariant.is_active == True
+    ).all()
+
+    existing_types = {v.course_type for v in db.query(CourseVariant).filter(
+        CourseVariant.branch_id == branch_id
+    ).all()}
+
+    for cv in course_level_variants:
+        if cv.course_type not in existing_types:
+            db.add(CourseVariant(
+                course_id=branch.course_id,
+                branch_id=branch_id,
+                course_type=cv.course_type,
+                is_active=True
+            ))
+
+    db.commit()
+    return db.query(Branch).options(selectinload(Branch.variants)).filter(Branch.id == branch_id).first()
+
+
 @router.delete("/branches/{branch_id}")
 def delete_branch(
     branch_id: int,
@@ -466,6 +532,39 @@ def delete_branch(
 
 # ===== FEE MANAGEMENT =====
 
+def _load_fee(db: Session, fee_id: int):
+    """Load a Fee with all needed relationships."""
+    return db.query(Fee).options(
+        joinedload(Fee.course_variant).options(
+            joinedload(CourseVariant.course).joinedload(Course.university),
+            joinedload(CourseVariant.branch)
+        )
+    ).filter(Fee.id == fee_id).first()
+
+
+def build_fee_response(fee) -> dict:
+    """Build FeeResponse dict from a Fee ORM object — mirrors build_student_response pattern."""
+    cv = fee.course_variant
+    return FeeResponse(
+        id=fee.id,
+        course_variant_id=fee.course_variant_id,
+        course_variant=cv,
+        branch_name=cv.branch.name if cv and cv.branch else None,
+        tuition_fee=fee.tuition_fee,
+        registration_fee=fee.registration_fee,
+        exam_fee_yearly=fee.exam_fee_yearly,
+        other_fees=fee.other_fees,
+        total_first_year=fee.total_first_year,
+        total_yearly=fee.total_yearly,
+        currency=fee.currency,
+        academic_year=fee.academic_year,
+        effective_from=fee.effective_from,
+        is_active=fee.is_active,
+        created_at=fee.created_at,
+        updated_at=fee.updated_at,
+    )
+
+
 @router.post("/fees", response_model=FeeResponse)
 def create_fee(
     fee_data: FeeCreate,
@@ -473,9 +572,7 @@ def create_fee(
     current_admin: User = Depends(get_current_admin)
 ):
     # Check if course variant exists
-    variant = db.query(CourseVariant).options(
-        joinedload(CourseVariant.course).joinedload(Course.university)
-    ).filter(CourseVariant.id == fee_data.course_variant_id).first()
+    variant = db.query(CourseVariant).filter(CourseVariant.id == fee_data.course_variant_id).first()
     if not variant:
         raise HTTPException(status_code=404, detail="Course variant not found")
 
@@ -487,32 +584,34 @@ def create_fee(
     fee = Fee(**fee_data.dict())
     db.add(fee)
     db.commit()
-    db.refresh(fee)
 
-    # Reload with relationships
-    fee = db.query(Fee).options(
-        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
-    ).filter(Fee.id == fee.id).first()
-    return fee
+    fee = _load_fee(db, fee.id)
+    return build_fee_response(fee)
 
 @router.get("/fees", response_model=List[FeeResponse])
 def get_fees(
     course_id: Optional[int] = None,
+    course_variant_id: Optional[int] = None,
     is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
     query = db.query(Fee).options(
-        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
+        joinedload(Fee.course_variant).options(
+            joinedload(CourseVariant.course).joinedload(Course.university),
+            joinedload(CourseVariant.branch)
+        )
     )
 
     if course_id:
         query = query.join(CourseVariant).filter(CourseVariant.course_id == course_id)
+    if course_variant_id:
+        query = query.filter(Fee.course_variant_id == course_variant_id)
     if is_active is not None:
         query = query.filter(Fee.is_active == is_active)
 
     fees = query.all()
-    return fees
+    return [build_fee_response(f) for f in fees]
 
 @router.get("/fees/{fee_id}", response_model=FeeResponse)
 def get_fee(
@@ -520,12 +619,10 @@ def get_fee(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    fee = db.query(Fee).options(
-        joinedload(Fee.course_variant).joinedload(CourseVariant.course).joinedload(Course.university)
-    ).filter(Fee.id == fee_id).first()
+    fee = _load_fee(db, fee_id)
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
-    return fee
+    return build_fee_response(fee)
 
 @router.patch("/fees/{fee_id}", response_model=FeeResponse)
 def update_fee(
@@ -543,8 +640,9 @@ def update_fee(
 
     fee.updated_at = datetime.utcnow()
     db.commit()
-    db.refresh(fee)
-    return fee
+
+    fee = _load_fee(db, fee_id)
+    return build_fee_response(fee)
 
 @router.delete("/fees/{fee_id}")
 def delete_fee(
@@ -617,7 +715,13 @@ def build_student_response(student):
         franchise_name=student.franchise.full_name,
         status=student.status.value,
         created_at=student.created_at,
-        updated_at=student.updated_at
+        updated_at=student.updated_at,
+        passport_photo=student.passport_photo,
+        aadhar_card_doc=student.aadhar_card_doc,
+        doc_eighth=student.doc_eighth,
+        doc_tenth=student.doc_tenth,
+        doc_twelfth=student.doc_twelfth,
+        doc_graduation=student.doc_graduation,
     )
 
 @router.post("/students", response_model=StudentResponse)
@@ -789,6 +893,77 @@ def update_student(
     db.refresh(student)
 
     return build_student_response(student)
+
+@router.post("/students/{student_id}/upload-documents")
+async def upload_student_documents_admin(
+    student_id: int,
+    passport_photo: Optional[UploadFile] = File(None),
+    aadhar_card: Optional[UploadFile] = File(None),
+    doc_eighth: Optional[UploadFile] = File(None),
+    doc_tenth: Optional[UploadFile] = File(None),
+    doc_twelfth: Optional[UploadFile] = File(None),
+    doc_graduation: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student_dir = f"media/students/{student_id}"
+    os.makedirs(student_dir, exist_ok=True)
+
+    saved = {}
+
+    async def save_file(upload: UploadFile, field_name: str, allowed_types: set, filename: str):
+        if upload.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name}: unsupported file type '{upload.content_type}'. Allowed: {', '.join(allowed_types)}"
+            )
+        content = await upload.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"{field_name}: file size must be under 5 MB")
+        ext = upload.filename.rsplit(".", 1)[-1] if "." in upload.filename else "bin"
+        file_path = f"{student_dir}/{filename}.{ext}"
+        with open(file_path, "wb") as f:
+            f.write(content)
+        return file_path
+
+    if passport_photo and passport_photo.filename:
+        path = await save_file(passport_photo, "Passport Photo", ALLOWED_IMAGE_TYPES, "passport_photo")
+        student.passport_photo = path
+        saved["passport_photo"] = path
+
+    if aadhar_card and aadhar_card.filename:
+        path = await save_file(aadhar_card, "Aadhar Card", ALLOWED_DOC_TYPES, "aadhar_card")
+        student.aadhar_card_doc = path
+        saved["aadhar_card_doc"] = path
+
+    if doc_eighth and doc_eighth.filename:
+        path = await save_file(doc_eighth, "8th Marksheet", ALLOWED_DOC_TYPES, "doc_eighth")
+        student.doc_eighth = path
+        saved["doc_eighth"] = path
+
+    if doc_tenth and doc_tenth.filename:
+        path = await save_file(doc_tenth, "10th Marksheet", ALLOWED_DOC_TYPES, "doc_tenth")
+        student.doc_tenth = path
+        saved["doc_tenth"] = path
+
+    if doc_twelfth and doc_twelfth.filename:
+        path = await save_file(doc_twelfth, "12th Marksheet", ALLOWED_DOC_TYPES, "doc_twelfth")
+        student.doc_twelfth = path
+        saved["doc_twelfth"] = path
+
+    if doc_graduation and doc_graduation.filename:
+        path = await save_file(doc_graduation, "Graduation Certificate", ALLOWED_DOC_TYPES, "doc_graduation")
+        student.doc_graduation = path
+        saved["doc_graduation"] = path
+
+    student.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"message": "Documents uploaded successfully", "files": saved}
 
 @router.get("/students", response_model=StudentListResponse)
 def get_all_students(

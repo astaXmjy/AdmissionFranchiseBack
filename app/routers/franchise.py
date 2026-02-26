@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+import shutil
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
@@ -13,6 +15,10 @@ from ..schemas import (
     UniversitySelectResponse, CourseSelectResponse, BranchSelectResponse
 )
 from sqlalchemy import func
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+ALLOWED_DOC_TYPES = {"image/jpeg", "image/png", "image/jpg", "application/pdf"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 router = APIRouter()
 
@@ -195,7 +201,13 @@ def create_student(
         franchise_name=current_franchise.full_name,
         status=student.status.value,
         created_at=student.created_at,
-        updated_at=student.updated_at
+        updated_at=student.updated_at,
+        passport_photo=student.passport_photo,
+        aadhar_card_doc=student.aadhar_card_doc,
+        doc_eighth=student.doc_eighth,
+        doc_tenth=student.doc_tenth,
+        doc_twelfth=student.doc_twelfth,
+        doc_graduation=student.doc_graduation,
     )
 
 @router.patch("/students/{student_id}", response_model=StudentResponse)
@@ -291,8 +303,89 @@ def update_student(
         franchise_name=current_franchise.full_name,
         status=student.status.value,
         created_at=student.created_at,
-        updated_at=student.updated_at
+        updated_at=student.updated_at,
+        passport_photo=student.passport_photo,
+        aadhar_card_doc=student.aadhar_card_doc,
+        doc_eighth=student.doc_eighth,
+        doc_tenth=student.doc_tenth,
+        doc_twelfth=student.doc_twelfth,
+        doc_graduation=student.doc_graduation,
     )
+
+@router.post("/students/{student_id}/upload-documents")
+async def upload_student_documents(
+    student_id: int,
+    passport_photo: Optional[UploadFile] = File(None),
+    aadhar_card: Optional[UploadFile] = File(None),
+    doc_eighth: Optional[UploadFile] = File(None),
+    doc_tenth: Optional[UploadFile] = File(None),
+    doc_twelfth: Optional[UploadFile] = File(None),
+    doc_graduation: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    student = db.query(Student).filter(
+        Student.id == student_id,
+        Student.franchise_id == current_franchise.id
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student_dir = f"media/students/{student_id}"
+    os.makedirs(student_dir, exist_ok=True)
+
+    saved = {}
+
+    async def save_file(upload: UploadFile, field_name: str, allowed_types: set, filename: str):
+        if upload.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name}: unsupported file type '{upload.content_type}'. Allowed: {', '.join(allowed_types)}"
+            )
+        content = await upload.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"{field_name}: file size must be under 5 MB")
+        ext = upload.filename.rsplit(".", 1)[-1] if "." in upload.filename else "bin"
+        file_path = f"{student_dir}/{filename}.{ext}"
+        with open(file_path, "wb") as f:
+            f.write(content)
+        return file_path
+
+    if passport_photo and passport_photo.filename:
+        path = await save_file(passport_photo, "Passport Photo", ALLOWED_IMAGE_TYPES, "passport_photo")
+        student.passport_photo = path
+        saved["passport_photo"] = path
+
+    if aadhar_card and aadhar_card.filename:
+        path = await save_file(aadhar_card, "Aadhar Card", ALLOWED_DOC_TYPES, "aadhar_card")
+        student.aadhar_card_doc = path
+        saved["aadhar_card_doc"] = path
+
+    if doc_eighth and doc_eighth.filename:
+        path = await save_file(doc_eighth, "8th Marksheet", ALLOWED_DOC_TYPES, "doc_eighth")
+        student.doc_eighth = path
+        saved["doc_eighth"] = path
+
+    if doc_tenth and doc_tenth.filename:
+        path = await save_file(doc_tenth, "10th Marksheet", ALLOWED_DOC_TYPES, "doc_tenth")
+        student.doc_tenth = path
+        saved["doc_tenth"] = path
+
+    if doc_twelfth and doc_twelfth.filename:
+        path = await save_file(doc_twelfth, "12th Marksheet", ALLOWED_DOC_TYPES, "doc_twelfth")
+        student.doc_twelfth = path
+        saved["doc_twelfth"] = path
+
+    if doc_graduation and doc_graduation.filename:
+        path = await save_file(doc_graduation, "Graduation Certificate", ALLOWED_DOC_TYPES, "doc_graduation")
+        student.doc_graduation = path
+        saved["doc_graduation"] = path
+
+    student.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"message": "Documents uploaded successfully", "files": saved}
+
 
 @router.get("/students", response_model=StudentListResponse)
 def get_my_students(

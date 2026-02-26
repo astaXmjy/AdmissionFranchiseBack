@@ -67,6 +67,13 @@ class StudentCreate(BaseModel):
     branch_specialization: Optional[str] = None
     skills: Optional[str] = None
 
+    # 8th Details
+    eighth_board: Optional[str] = None
+    eighth_board_other: Optional[str] = None
+    eighth_school: Optional[str] = None
+    eighth_passing_year: Optional[str] = None
+    eighth_percentage: Optional[str] = None
+
     # 10th Details
     tenth_board: Optional[str] = None
     tenth_board_other: Optional[str] = None
@@ -120,6 +127,11 @@ class StudentUpdate(BaseModel):
     course_variant_id: Optional[int] = None
     branch_specialization: Optional[str] = None
     skills: Optional[str] = None
+    eighth_board: Optional[str] = None
+    eighth_board_other: Optional[str] = None
+    eighth_school: Optional[str] = None
+    eighth_passing_year: Optional[str] = None
+    eighth_percentage: Optional[str] = None
     tenth_board: Optional[str] = None
     tenth_board_other: Optional[str] = None
     tenth_school: Optional[str] = None
@@ -171,6 +183,13 @@ class StudentResponse(BaseModel):
     branch_specialization: Optional[str]
     skills: Optional[str] = None
 
+    # 8th Details
+    eighth_board: Optional[str] = None
+    eighth_board_other: Optional[str] = None
+    eighth_school: Optional[str] = None
+    eighth_passing_year: Optional[str] = None
+    eighth_percentage: Optional[str] = None
+
     # 10th Details
     tenth_board: Optional[str] = None
     tenth_board_other: Optional[str] = None
@@ -214,6 +233,14 @@ class StudentResponse(BaseModel):
     status: AdmissionStatus
     created_at: datetime
     updated_at: datetime
+
+    # Document uploads
+    passport_photo: Optional[str] = None
+    aadhar_card_doc: Optional[str] = None
+    doc_eighth: Optional[str] = None
+    doc_tenth: Optional[str] = None
+    doc_twelfth: Optional[str] = None
+    doc_graduation: Optional[str] = None
 
 class StudentListResponse(BaseModel):
     students: List[StudentResponse]
@@ -423,9 +450,18 @@ class FeeUpdate(BaseModel):
     effective_from: Optional[date] = None
     is_active: Optional[bool] = None
 
+class BranchInFeeResponse(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
 class CourseVariantInFeeResponse(BaseModel):
     id: int
     course_type: str
+    branch_id: Optional[int] = None
+    branch: Optional[BranchInFeeResponse] = None
     course: Optional["CourseInFeeResponse"] = None
 
     class Config:
@@ -444,6 +480,7 @@ class FeeResponse(BaseModel):
     id: int
     course_variant_id: int
     course_variant: Optional[CourseVariantInFeeResponse] = None
+    branch_name: Optional[str] = None
     tuition_fee: Decimal
     registration_fee: Decimal
     exam_fee_yearly: Decimal

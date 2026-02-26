@@ -112,6 +112,7 @@ class CourseVariant(Base):
     fee = relationship("Fee", back_populates="course_variant", uselist=False, cascade="all, delete-orphan")
     students = relationship("Student", back_populates="course_variant")
 
+
 class Fee(Base):
     __tablename__ = "fee"
 
@@ -158,6 +159,13 @@ class Student(Base):
     previous_class = Column(String, nullable=True)
     branch_specialization = Column(String, nullable=True)
     skills = Column(Text, nullable=True)
+
+    # 8th Details
+    eighth_board = Column(String(50), nullable=True)
+    eighth_board_other = Column(String(100), nullable=True)
+    eighth_school = Column(String(255), nullable=True)
+    eighth_passing_year = Column(String(4), nullable=True)
+    eighth_percentage = Column(String(10), nullable=True)
 
     # 10th Details
     tenth_board = Column(String(50), nullable=True)
@@ -214,6 +222,14 @@ class Student(Base):
     branch = relationship("Branch", back_populates="students")
     course_variant = relationship("CourseVariant", back_populates="students")
     fee = relationship("Fee", back_populates="students")
+
+    # Document uploads
+    passport_photo = Column(String, nullable=True)
+    aadhar_card_doc = Column(String, nullable=True)
+    doc_eighth = Column(String, nullable=True)
+    doc_tenth = Column(String, nullable=True)
+    doc_twelfth = Column(String, nullable=True)
+    doc_graduation = Column(String, nullable=True)
 
     status = Column(SQLEnum(AdmissionStatus), default=AdmissionStatus.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)

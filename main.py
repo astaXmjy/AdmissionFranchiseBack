@@ -1,5 +1,7 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.database import engine
 from app.models import Base
 from app.routers import auth, admin, franchise
@@ -27,6 +29,10 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 app.include_router(franchise.router, prefix="/franchise", tags=["Franchise"])
+
+# Serve uploaded media files
+os.makedirs("media", exist_ok=True)
+app.mount("/media", StaticFiles(directory="media"), name="media")
 
 # Startup event
 @app.on_event("startup")
