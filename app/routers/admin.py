@@ -410,19 +410,35 @@ def create_branch(
     db.add(branch)
     db.flush()  # get branch.id before commit
 
-    # Auto-create a branch-level variant for each active course-level variant
+    # Auto-create a branch-level variant (and copy fee) for each active course-level variant
     course_level_variants = db.query(CourseVariant).filter(
         CourseVariant.course_id == branch_data.course_id,
         CourseVariant.branch_id == None,
         CourseVariant.is_active == True
     ).all()
     for cv in course_level_variants:
-        db.add(CourseVariant(
+        branch_variant = CourseVariant(
             course_id=branch_data.course_id,
             branch_id=branch.id,
             course_type=cv.course_type,
             is_active=True
-        ))
+        )
+        db.add(branch_variant)
+        db.flush()  # get branch_variant.id
+
+        # Copy fee from the course-level variant if one exists
+        if cv.fee:
+            db.add(Fee(
+                course_variant_id=branch_variant.id,
+                tuition_fee=cv.fee.tuition_fee,
+                registration_fee=cv.fee.registration_fee,
+                exam_fee_yearly=cv.fee.exam_fee_yearly,
+                other_fees=cv.fee.other_fees,
+                currency=cv.fee.currency,
+                academic_year=cv.fee.academic_year,
+                effective_from=cv.fee.effective_from,
+                is_active=cv.fee.is_active,
+            ))
 
     db.commit()
     db.refresh(branch)
@@ -583,6 +599,31 @@ def create_fee(
 
     fee = Fee(**fee_data.dict())
     db.add(fee)
+    db.flush()  # get fee.id
+
+    # If this is a course-level fee, auto-propagate to all existing branch-level variants
+    if variant.branch_id is None:
+        branch_variants = db.query(CourseVariant).filter(
+            CourseVariant.course_id == variant.course_id,
+            CourseVariant.branch_id != None,
+            CourseVariant.course_type == variant.course_type,
+            CourseVariant.is_active == True,
+        ).all()
+        for bv in branch_variants:
+            already_has_fee = db.query(Fee).filter(Fee.course_variant_id == bv.id).first()
+            if not already_has_fee:
+                db.add(Fee(
+                    course_variant_id=bv.id,
+                    tuition_fee=fee_data.tuition_fee,
+                    registration_fee=fee_data.registration_fee,
+                    exam_fee_yearly=fee_data.exam_fee_yearly,
+                    other_fees=fee_data.other_fees,
+                    currency=fee_data.currency,
+                    academic_year=fee_data.academic_year,
+                    effective_from=fee_data.effective_from,
+                    is_active=fee_data.is_active,
+                ))
+
     db.commit()
 
     fee = _load_fee(db, fee.id)
