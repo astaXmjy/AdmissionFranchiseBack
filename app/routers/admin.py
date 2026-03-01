@@ -676,7 +676,13 @@ def update_fee(
     if not fee:
         raise HTTPException(status_code=404, detail="Fee not found")
 
-    for field, value in fee_data.dict(exclude_unset=True).items():
+    update_data = fee_data.dict(exclude_unset=True)
+    if 'course_variant_id' in update_data:
+        variant = db.query(CourseVariant).filter(CourseVariant.id == update_data['course_variant_id']).first()
+        if not variant:
+            raise HTTPException(status_code=404, detail="Course variant not found")
+
+    for field, value in update_data.items():
         setattr(fee, field, value)
 
     fee.updated_at = datetime.utcnow()

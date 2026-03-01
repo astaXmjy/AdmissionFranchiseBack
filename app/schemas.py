@@ -441,6 +441,7 @@ class FeeCreate(BaseModel):
     is_active: bool = True
 
 class FeeUpdate(BaseModel):
+    course_variant_id: Optional[int] = None
     tuition_fee: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     registration_fee: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     exam_fee_yearly: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
