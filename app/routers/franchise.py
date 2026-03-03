@@ -12,9 +12,10 @@ from ..auth import get_current_franchise
 from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
 from ..schemas import (
     StudentCreate, StudentUpdate, StudentResponse, StudentListResponse, StudentStats,
-    UniversitySelectResponse, CourseSelectResponse, BranchSelectResponse
+    UniversitySelectResponse, CourseSelectResponse, BranchSelectResponse, FeeResponse
 )
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/jpg"}
 ALLOWED_DOC_TYPES = {"image/jpeg", "image/png", "image/jpg", "application/pdf"}
@@ -67,6 +68,24 @@ def get_branches_for_select(
         Branch.is_active == True
     ).all()
     return branches
+
+@router.get("/fees", response_model=List[FeeResponse])
+def get_fee_for_variant(
+    course_variant_id: int,
+    db: Session = Depends(get_db),
+    current_franchise: User = Depends(get_current_franchise)
+):
+    """Get fee for a specific course variant (for admission form display)"""
+    fees = db.query(Fee).options(
+        joinedload(Fee.course_variant).options(
+            joinedload(CourseVariant.course).joinedload(Course.university),
+            joinedload(CourseVariant.branch)
+        )
+    ).filter(Fee.course_variant_id == course_variant_id).all()
+
+    from ..routers.admin import build_fee_response
+    return [build_fee_response(f) for f in fees]
+
 
 @router.post("/students", response_model=StudentResponse)
 def create_student(
