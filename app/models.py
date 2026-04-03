@@ -29,6 +29,7 @@ class User(Base):
     pan_number = Column(String(10), nullable=True)
     phone_number = Column(String(15), nullable=True)
     email = Column(String, nullable=True)
+    allowed_degree_types = Column(String, nullable=True)  # comma-separated e.g. "UG,Class"
 
     # Relationship to students
     students = relationship("Student", back_populates="franchise")
@@ -232,5 +233,6 @@ class Student(Base):
     doc_graduation = Column(String, nullable=True)
 
     status = Column(SQLEnum(AdmissionStatus), default=AdmissionStatus.PENDING)
+    registration_number = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

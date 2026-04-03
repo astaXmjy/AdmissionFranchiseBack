@@ -16,7 +16,7 @@ from ..auth import get_current_admin, get_password_hash
 from ..models import User, Student, University, Course, CourseVariant, Fee, Branch
 from ..schemas import (
     UserCreate, UserUpdate, UserResponse, StudentListResponse, StudentResponse,
-    StudentFilter, StatusUpdate, CommissionUpdate, StudentStats, FranchiseStats,
+    StudentFilter, StatusUpdate, CommissionUpdate, RegistrationUpdate, StudentStats, FranchiseStats,
     UniversityCreate, UniversityUpdate, UniversityResponse, UniversitySelectResponse,
     CourseCreate, CourseUpdate, CourseResponse, CourseSelectResponse, CourseWithFeeResponse,
     FeeCreate, FeeUpdate, FeeResponse,
@@ -49,7 +49,8 @@ def create_franchise(
         gst_number=user_data.gst_number,
         pan_number=user_data.pan_number,
         phone_number=user_data.phone_number,
-        email=user_data.email
+        email=user_data.email,
+        allowed_degree_types=user_data.allowed_degree_types
     )
     db.add(franchise)
     db.commit()
@@ -141,10 +142,16 @@ def get_universities(
 
 @router.get("/universities/select", response_model=List[UniversitySelectResponse])
 def get_universities_for_select(
+    degree_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin)
 ):
-    universities = db.query(University).filter(University.is_active == True).all()
+    DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
+    query = db.query(University).filter(University.is_active == True)
+    if degree_type and degree_type in DEGREE_MAP:
+        db_values = DEGREE_MAP[degree_type]
+        query = query.filter(University.courses.any(Course.degree_type.in_(db_values) & (Course.is_active == True)))
+    universities = query.all()
     return universities
 
 @router.get("/universities/{university_id}", response_model=UniversityResponse)
@@ -723,6 +730,7 @@ def build_student_response(student):
         franchise_id=student.franchise_id,
         franchise_name=student.franchise.full_name,
         status=student.status.value,
+        registration_number=student.registration_number,
         created_at=student.created_at,
         updated_at=student.updated_at,
         passport_photo=student.passport_photo,
@@ -1073,6 +1081,21 @@ def update_student_commission(
         "commission_amount": str(student.commission_amount)
     }
 
+@router.patch("/students/{student_id}/registration")
+def update_student_registration(
+    student_id: int,
+    reg_data: RegistrationUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    student.registration_number = reg_data.registration_number
+    student.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Registration number updated", "registration_number": student.registration_number}
+
 @router.get("/statistics", response_model=StudentStats)
 def get_statistics(
     db: Session = Depends(get_db),
@@ -1117,7 +1140,8 @@ def get_franchise_statistics(
             gst_number=franchise.gst_number,
             pan_number=franchise.pan_number,
             phone_number=franchise.phone_number,
-            email=franchise.email
+            email=franchise.email,
+            allowed_degree_types=franchise.allowed_degree_types
         ))
 
     return franchise_stats

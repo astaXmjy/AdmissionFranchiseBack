@@ -15,6 +15,7 @@ class UserCreate(BaseModel):
     pan_number: Optional[str] = None
     phone_number: Optional[str] = None
     email: Optional[str] = None
+    allowed_degree_types: Optional[str] = None
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -25,6 +26,7 @@ class UserUpdate(BaseModel):
     pan_number: Optional[str] = None
     phone_number: Optional[str] = None
     email: Optional[str] = None
+    allowed_degree_types: Optional[str] = None  # comma-separated e.g. "UG,Class"
 
 class UserResponse(BaseModel):
     id: int
@@ -38,6 +40,7 @@ class UserResponse(BaseModel):
     pan_number: Optional[str] = None
     phone_number: Optional[str] = None
     email: Optional[str] = None
+    allowed_degree_types: Optional[str] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -220,6 +223,9 @@ class StudentResponse(BaseModel):
     apaar_id: Optional[str] = None
     session: Optional[str] = None
 
+    # Registration
+    registration_number: Optional[str] = None
+
     # Contact & Address
     street_locality: str
     city: str
@@ -262,6 +268,9 @@ class StatusUpdate(BaseModel):
 class CommissionUpdate(BaseModel):
     commission_percentage: Decimal = Field(..., ge=0, le=100)
 
+class RegistrationUpdate(BaseModel):
+    registration_number: str = Field(..., min_length=1, max_length=100)
+
 # Statistics schemas
 class StudentStats(BaseModel):
     total: int
@@ -284,6 +293,7 @@ class FranchiseStats(BaseModel):
     pan_number: Optional[str] = None
     phone_number: Optional[str] = None
     email: Optional[str] = None
+    allowed_degree_types: Optional[str] = None
 
 # ===== UNIVERSITY SCHEMAS =====
 class UniversityCreate(BaseModel):

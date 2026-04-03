@@ -24,13 +24,29 @@ MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 router = APIRouter()
 
 # Allow franchises to view universities and courses for form dropdowns
+@router.get("/me/degree-types")
+def get_my_degree_types(
+    current_franchise: User = Depends(get_current_franchise)
+):
+    """Return allowed degree types for the logged-in franchise"""
+    all_types = ["UG", "PG", "Diploma/Certificate", "Class"]
+    if current_franchise.allowed_degree_types:
+        return current_franchise.allowed_degree_types.split(',')
+    return all_types
+
 @router.get("/universities/select", response_model=List[UniversitySelectResponse])
 def get_universities_for_select(
+    degree_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_franchise: User = Depends(get_current_franchise)
 ):
     """Get active universities for dropdown selection"""
-    universities = db.query(University).filter(University.is_active == True).all()
+    DEGREE_MAP = {"UG": ["Undergraduate"], "PG": ["Postgraduate"], "Diploma/Certificate": ["Diploma/Certificate"], "Class": ["Class"]}
+    query = db.query(University).filter(University.is_active == True)
+    if degree_type and degree_type in DEGREE_MAP:
+        db_values = DEGREE_MAP[degree_type]
+        query = query.filter(University.courses.any(Course.degree_type.in_(db_values) & (Course.is_active == True)))
+    universities = query.all()
     return universities
 
 @router.get("/courses/select/{university_id}", response_model=List[CourseSelectResponse])
@@ -219,6 +235,7 @@ def create_student(
         franchise_id=student.franchise_id,
         franchise_name=current_franchise.full_name,
         status=student.status.value,
+        registration_number=student.registration_number,
         created_at=student.created_at,
         updated_at=student.updated_at,
         passport_photo=student.passport_photo,
@@ -321,6 +338,7 @@ def update_student(
         franchise_id=student.franchise_id,
         franchise_name=current_franchise.full_name,
         status=student.status.value,
+        registration_number=student.registration_number,
         created_at=student.created_at,
         updated_at=student.updated_at,
         passport_photo=student.passport_photo,
